@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pi-ship.dev/schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "provider", "project", "run"],
+  "properties": {
+    "name": { "type": "string", "minLength": 1 },
+    "provider": { "const": "railway" },
+    "project": { "type": "string", "minLength": 1 },
+    "run": { "$ref": "#/$defs/commandObject" },
+    "build": { "$ref": "#/$defs/commandObject" },
+    "checks": { "type": "array", "items": { "$ref": "#/$defs/argv" }, "minItems": 1 },
+    "secrets": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 },
+    "db": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "migrate": {
+          "type": "object", "additionalProperties": false, "required": ["command"],
+          "properties": { "command": { "$ref": "#/$defs/argv" }, "allowProductionMigrations": { "type": "boolean" } }
+        },
+        "provision": { "enum": ["railway-postgres", "external"] }
+      }
+    }
+  },
+  "$defs": {
+    "argv": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 },
+    "commandObject": { "type": "object", "additionalProperties": false, "required": ["command"], "properties": { "command": { "$ref": "#/$defs/argv" } } }
+  }
+}
