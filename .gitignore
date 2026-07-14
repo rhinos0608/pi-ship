@@ -1,0 +1,10 @@
+.DS_Store
+node_modules/
+dist/
+.pi-ship/
+.pi-smartread/
+.pi-smartread.tags.cache/
+.pi-smartread.embeddings.cache/
+.pi-subagents/
+.env
+*.log

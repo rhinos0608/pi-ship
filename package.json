@@ -1,0 +1,33 @@
+{
+  "name": "pi-ship",
+  "version": "0.1.0",
+  "description": "Pi extension for Railway deployment lifecycle",
+  "type": "module",
+  "main": "./src/index.ts",
+  "files": ["src", "README.md", "pi-ship.schema.json", "docs"],
+  "keywords": ["pi-package"],
+  "pi": { "extensions": ["./src/index.ts"] },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest --run",
+    "test:watch": "vitest",
+    "acceptance": "node scripts/acceptance.mjs"
+  },
+  "dependencies": {},
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.77.0",
+    "@earendil-works/pi-ai": "0.77.0",
+    "@earendil-works/pi-tui": "0.77.0",
+    "@types/node": "^24.12.4",
+    "typebox": "1.1.38",
+    "typescript": "~5.9.3",
+    "vitest": "~3.2.4"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  }
+}
