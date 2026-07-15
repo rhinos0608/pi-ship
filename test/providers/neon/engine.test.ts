@@ -5,7 +5,7 @@ import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { applyNeonPlan, type ApplyNeonContext } from "../../../src/providers/neon/engine.js";
 import { buildNeonPlan } from "../../../src/providers/neon/plan.js";
 import { ApprovalRegistry } from "../../../src/core/approval.js";
-import { defaultNeonState, saveNeonState, type NeonState } from "../../../src/providers/neon/state.js";
+import { defaultNeonState, saveNeonState, loadNeonState, type NeonState } from "../../../src/providers/neon/state.js";
 import type { NeonManifest } from "../../../src/providers/neon/manifest.js";
 import type { NeonAdapter, EnsureProjectResult, EnsureBranchResult, CreatePreviewBranchResult } from "../../../src/providers/neon/adapter.js";
 
@@ -71,6 +71,10 @@ function createFakeAdapter(): NeonAdapter & {
       branchCounter++;
       const id = `br-${branchCounter}`;
       return { branchId: id, connectionUri: `postgresql://user:pass@${id}.neon.tech/db` };
+    },
+    async restoreBranch(projectId, branchId, params) {
+      calls.push({ method: "restoreBranch", args: [projectId, branchId, params] });
+      maybeFail("restoreBranch");
     },
   };
 }
@@ -143,6 +147,11 @@ describe("applyNeonPlan", () => {
       expect(state.projectName).toBe("test-project");
       expect(Object.keys(state.branchIds).length).toBeGreaterThan(0);
       expect(Object.keys(state.connectionUris).length).toBeGreaterThan(0);
+      // Connection URIs must be redacted (no plaintext user:pass)
+      for (const uri of Object.values(state.connectionUris)) {
+        expect(uri).not.toMatch(/user:pass/);
+        expect(uri).toContain("[REDACTED]");
+      }
       expect(state.history).toHaveLength(1);
       expect(state.history[0].planId).toBe(ctx.plan.planId);
       expect(state.history[0].status).toBe("ok");
@@ -209,15 +218,11 @@ describe("applyNeonPlan", () => {
 
     it("throws if migration plan missing migrationCommand", async () => {
       const { ctx } = await makeFixture();
-      const badPlan = buildNeonPlan(manifest, "production", "migration", {
+      expect(() => buildNeonPlan(manifest, "production", "migration", {
         planId: "bad-mig",
         createdAt: new Date().toISOString(),
         // no migrationCommand
-      });
-      ctx.plan = badPlan;
-      ctx.suppliedDigest = badPlan.planDigest;
-      ctx.registry.approve(badPlan.planId, badPlan.planDigest, ctx.cwd, { domain: "database", risk: "destructive" });
-      await expect(applyNeonPlan(ctx)).rejects.toMatchObject({ code: "E_PRECONDITION" });
+      })).toThrow();
     });
   });
 
@@ -263,7 +268,7 @@ describe("applyNeonPlan", () => {
         suppliedDigest: previewPlan.planDigest,
       });
       expect(result.content[0]?.text).toContain("Applied preview plan");
-      expect(prevAdapter.calls.some((c) => c.method === "createPreviewBranch")).toBe(true);
+      expect(prevAdapter.calls.some((c) => c.method === "ensureBranch")).toBe(true);
     });
 
     it("throws if no parent branch available", async () => {
@@ -276,6 +281,152 @@ describe("applyNeonPlan", () => {
       ctx.suppliedDigest = previewPlan.planDigest;
       ctx.registry.approve(previewPlan.planId, previewPlan.planDigest, ctx.cwd, { domain: "database", risk: "destructive" });
       await expect(applyNeonPlan(ctx)).rejects.toMatchObject({ code: "E_PRECONDITION" });
+    });
+  });
+
+  describe("restore point capture", () => {
+    it("captures restore point before migration step", async () => {
+      const { registry, cwd } = await makeFixture();
+      // First provision
+      const adapter = createFakeAdapter();
+      const provPlan = buildNeonPlan(manifest, "production", "provision", {
+        planId: "prov-rp",
+        createdAt: new Date().toISOString(),
+      });
+      registry.approve(provPlan.planId, provPlan.planDigest, cwd, { domain: "database", risk: "destructive" });
+      await applyNeonPlan({
+        adapter,
+        manifest,
+        plan: provPlan,
+        cwd,
+        envReader: () => ({}),
+        piExec: async () => ({ code: 0, stdout: "", stderr: "", killed: false, cancelled: false, truncated: false }),
+        registry,
+        suppliedDigest: provPlan.planDigest,
+      });
+
+      // Now migration plan
+      const migratePlan = buildNeonPlan(manifest, "production", "migration", {
+        planId: "migrate-rp",
+        createdAt: new Date().toISOString(),
+        migrationCommand: ["npx", "prisma", "migrate", "deploy"],
+      });
+      registry.approve(migratePlan.planId, migratePlan.planDigest, cwd, { domain: "database", risk: "destructive" });
+
+      const migAdapter = createFakeAdapter();
+      const execFn = vi.fn(async () => ({ code: 0, stdout: "", stderr: "", killed: false, cancelled: false, truncated: false }));
+      await applyNeonPlan({
+        adapter: migAdapter,
+        manifest,
+        plan: migratePlan,
+        cwd,
+        envReader: () => ({}),
+        piExec: execFn,
+        registry,
+        suppliedDigest: migratePlan.planDigest,
+      });
+
+      // Verify restore point was saved in state
+      const { loadNeonState } = await import("../../../src/providers/neon/state.js");
+      const state = await loadNeonState(cwd);
+      expect(state.restorePoints).toBeDefined();
+      expect(state.restorePoints!.length).toBeGreaterThanOrEqual(1);
+      const rp = state.restorePoints!.find((rp) => rp.planId === migratePlan.planId);
+      expect(rp).toBeDefined();
+      expect(rp!.planDigest).toBe(migratePlan.planDigest);
+      expect(rp!.projectId).toBeDefined();
+      expect(rp!.branchId).toBeDefined();
+      expect(rp!.timestamp).toBeDefined();
+    });
+  });
+
+  describe("rollback intent", () => {
+    it("builds rollback plan with restore-point binding", async () => {
+      const rollbackPlan = buildNeonPlan(manifest, "production", "rollback", {
+        planId: "rb-plan-1",
+        createdAt: new Date().toISOString(),
+        restoreTimestamp: "2026-01-10T12:00:00.000Z",
+        sourceBranchId: "br-source",
+        targetBranchId: "br-target",
+      });
+      expect(rollbackPlan.intent).toBe("rollback");
+      expect(rollbackPlan.restoreTimestamp).toBe("2026-01-10T12:00:00.000Z");
+      expect(rollbackPlan.sourceBranchId).toBe("br-source");
+      expect(rollbackPlan.targetBranchId).toBe("br-target");
+    });
+
+    it("applies rollback plan by calling adapter.restoreBranch with correct params", async () => {
+      const { registry, cwd } = await makeFixture();
+      // First provision so state has projectId + branch
+      const adapter = createFakeAdapter();
+      const provPlan = buildNeonPlan(manifest, "production", "provision", {
+        planId: "prov-rba",
+        createdAt: new Date().toISOString(),
+      });
+      registry.approve(provPlan.planId, provPlan.planDigest, cwd, { domain: "database", risk: "destructive" });
+      await applyNeonPlan({
+        adapter,
+        manifest,
+        plan: provPlan,
+        cwd,
+        envReader: () => ({}),
+        piExec: async () => ({ code: 0, stdout: "", stderr: "", killed: false, cancelled: false, truncated: false }),
+        registry,
+        suppliedDigest: provPlan.planDigest,
+      });
+
+      // Build rollback plan
+      const rbPlan = buildNeonPlan(manifest, "production", "rollback", {
+        planId: "rb-apply-1",
+        createdAt: new Date().toISOString(),
+        restoreTimestamp: "2026-01-10T12:00:00.000Z",
+        sourceBranchId: "br-source",
+        targetBranchId: "br-1",
+      });
+      registry.approve(rbPlan.planId, rbPlan.planDigest, cwd, { domain: "database", risk: "destructive" });
+
+      // Set up restore point in state (normally captured during migration)
+      const preRollbackState = await loadNeonState(cwd);
+      preRollbackState.restorePoints = [{
+        planId: "rb-apply-1",
+        planDigest: rbPlan.planDigest,
+        projectId: "proj-1",
+        branchId: "br-1",
+        timestamp: "2026-01-10T12:00:00.000Z",
+        at: new Date().toISOString(),
+      }];
+      await saveNeonState(cwd, preRollbackState);
+
+      const rbAdapter = createFakeAdapter();
+      const result = await applyNeonPlan({
+        adapter: rbAdapter,
+        manifest,
+        plan: rbPlan,
+        cwd,
+        envReader: () => ({}),
+        piExec: async () => ({ code: 0, stdout: "", stderr: "", killed: false, cancelled: false, truncated: false }),
+        registry,
+        suppliedDigest: rbPlan.planDigest,
+      });
+      expect(result.content[0]?.text).toContain("Applied rollback plan");
+      const rbCall = rbAdapter.calls.find((c) => c.method === "restoreBranch");
+      expect(rbCall).toBeDefined();
+      const [projectId, branchId, params] = rbCall!.args as [string, string, { sourceTimestamp: string; sourceBranchId?: string; preserveUnderName?: string }];
+      expect(projectId).toBe("proj-1");
+      // targetBranchId comes from state.branchIds["production"] (provisioned branch "br-1")
+      expect(branchId).toBe("br-1");
+      expect(params.sourceTimestamp).toBe("2026-01-10T12:00:00.000Z");
+      expect(params.sourceBranchId).toBe("br-source");
+      expect(params.preserveUnderName).toBeDefined();
+      expect(params.preserveUnderName).toMatch(/^test-project_old_/);
+    });
+
+    it("rejects rollback plan without restoreTimestamp", async () => {
+      expect(() => buildNeonPlan(manifest, "production", "rollback", {
+        planId: "rb-fail",
+        createdAt: new Date().toISOString(),
+        sourceBranchId: "br-1",
+      })).toThrow();
     });
   });
 
@@ -339,9 +490,9 @@ describe("applyNeonPlan", () => {
       });
 
       // Pre-populate journal with completed steps
-      await appendJournal(cwd, { ts: "t1", planId: ctx.plan.planId, step: "ensureProject", status: "ok" });
-      await appendJournal(cwd, { ts: "t2", planId: ctx.plan.planId, step: "ensureBranch", status: "ok" });
-      await appendJournal(cwd, { ts: "t3", planId: ctx.plan.planId, step: "getConnectionUri", status: "ok" });
+      await appendJournal(cwd, { ts: "t1", planId: ctx.plan.planId, planDigest: ctx.plan.planDigest, step: "ensureProject", status: "ok" });
+      await appendJournal(cwd, { ts: "t2", planId: ctx.plan.planId, planDigest: ctx.plan.planDigest, step: "ensureBranch", status: "ok" });
+      await appendJournal(cwd, { ts: "t3", planId: ctx.plan.planId, planDigest: ctx.plan.planDigest, step: "getConnectionUri", status: "ok" });
 
       // Run — should skip all steps but still succeed
       const result = await applyNeonPlan(ctx);
@@ -377,7 +528,7 @@ describe("applyNeonPlan", () => {
       ctx.registry.approve(migPlan.planId, migPlan.planDigest, cwd, { domain: "database", risk: "destructive" });
 
       // Pre-populate journal with dangling migrate step
-      await appendJournal(cwd, { ts: "t1", planId: migPlan.planId, step: "migrate", status: "start" });
+      await appendJournal(cwd, { ts: "t1", planId: migPlan.planId, planDigest: migPlan.planDigest, step: "migrate", status: "start" });
 
       await expect(applyNeonPlan(ctx)).rejects.toMatchObject({ code: "E_STATE_CONFLICT" });
     });

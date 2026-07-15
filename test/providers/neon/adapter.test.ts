@@ -34,7 +34,7 @@ function createFakeClient(): NeonClient & {
     async getConnectionUri(_projectId, _branchId, dbName) { calls.push({ method: "getConnectionUri", args: [_projectId, _branchId, dbName] }); return `postgresql://user:pass@host.neon.tech/${dbName}`; },
     async listDatabases() { calls.push({ method: "listDatabases", args: [] }); return [{ id: "db-1", branch_id: "br-1", name: "neondb", owner_name: "neondb_owner", created_at: "t", updated_at: "t" }]; },
     async getOperation(_projectId, opId) { calls.push({ method: "getOperation", args: [_projectId, opId] }); return { id: opId, project_id: _projectId, action: "create", status: "finished", created_at: "t", updated_at: "t" } as NeonOperation; },
-    async restoreBranch() { calls.push({ method: "restoreBranch", args: [] }); return { operations: [] }; },
+    async restoreBranch(projectId, branchId, params) { calls.push({ method: "restoreBranch", args: [projectId, branchId, params] }); return { operations: [] }; },
     async pollOperation(_projectId, opId) { calls.push({ method: "pollOperation", args: [_projectId, opId] }); return { id: opId, project_id: _projectId, action: "create", status: "finished", created_at: "t", updated_at: "t" } as NeonOperation; },
   };
 }
@@ -142,6 +142,45 @@ describe("NeonAdapter", () => {
     });
   });
 
+  describe("restoreBranch", () => {
+    it("delegates to client.restoreBranch with correct params", async () => {
+      const { adapter, client } = makeAdapter();
+      const project = await adapter.ensureProject("my-project");
+      const mainBranch = await adapter.ensureBranch(project.projectId, "main");
+
+      await adapter.restoreBranch(project.projectId, mainBranch.branchId, {
+        sourceTimestamp: "2026-01-10T12:00:00.000Z",
+        sourceBranchId: "br-source",
+        preserveUnderName: "main_old_12345",
+      });
+
+      const restoreCalls = client.calls.filter((c) => c.method === "restoreBranch");
+      expect(restoreCalls.length).toBeGreaterThanOrEqual(1);
+      const call = restoreCalls[restoreCalls.length - 1];
+      expect(call.args[0]).toBe(project.projectId);
+      expect(call.args[1]).toBe(mainBranch.branchId);
+      const params = call.args[2] as any;
+      expect(params.source_timestamp).toBe("2026-01-10T12:00:00.000Z");
+      expect(params.source_branch_id).toBe("br-source");
+      expect(params.preserve_under_name).toBe("main_old_12345");
+    });
+
+    it("calls restoreBranch without preserveUnderName when not given", async () => {
+      const { adapter, client } = makeAdapter();
+      const project = await adapter.ensureProject("my-project");
+      const mainBranch = await adapter.ensureBranch(project.projectId, "main");
+
+      await adapter.restoreBranch(project.projectId, mainBranch.branchId, {
+        sourceTimestamp: "2026-01-10T12:00:00.000Z",
+      });
+
+      const restoreCalls = client.calls.filter((c) => c.method === "restoreBranch");
+      expect(restoreCalls.length).toBeGreaterThanOrEqual(1);
+      const params = restoreCalls[restoreCalls.length - 1].args[2] as any;
+      expect(params.preserve_under_name).toBeUndefined();
+    });
+  });
+
   describe("createPreviewBranch", () => {
     it("creates preview branch with expiresAt", async () => {
       const { adapter, client } = makeAdapter();
@@ -152,6 +191,14 @@ describe("NeonAdapter", () => {
       const result = await adapter.createPreviewBranch(project.projectId, mainBranch.branchId, "preview-feat", expiresAt);
       expect(result.branchId).toBeDefined();
       expect(result.connectionUri).toBeDefined();
+
+      // Find the last createBranch call (from createPreviewBranch, not ensureBranch)
+      const createBranchCalls = client.calls.filter((c) => c.method === "createBranch");
+      expect(createBranchCalls.length).toBeGreaterThanOrEqual(2);
+      const previewBranchCall = createBranchCalls[createBranchCalls.length - 1];
+      expect(previewBranchCall).toBeDefined();
+      const config = previewBranchCall.args[1] as any;
+      expect(config.branch.expires_at).toBe(expiresAt);
     });
 
     it("creates preview branch without expiresAt", async () => {

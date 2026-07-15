@@ -67,6 +67,9 @@ function renderNeonPlanSummary(plan: NeonPlan): string {
   ];
   if (plan.migrationCommand) lines.push(`Migration: ${plan.migrationCommand.join(" ")}`);
   if (plan.previewExpiresAt) lines.push(`Preview expires: ${plan.previewExpiresAt}`);
+  if (plan.restoreTimestamp) lines.push(`Restore point: ${plan.restoreTimestamp}`);
+  if (plan.sourceBranchId) lines.push(`Source branch: ${plan.sourceBranchId}`);
+  if (plan.targetBranchId) lines.push(`Target branch: ${plan.targetBranchId}`);
   return lines.join("\n");
 }
 
@@ -74,13 +77,14 @@ async function validateAction(
   manifest: NeonManifest,
   envReader: (names: string[]) => Record<string, string | undefined>,
 ): Promise<ToolResult> {
-  const missing = (manifest.migrations?.command ?? []).filter(() => false);
+  const apiKey = envReader(["NEON_API_KEY"])["NEON_API_KEY"];
+  const missing = apiKey ? [] : ["NEON_API_KEY"];
   return {
     content: [{
       type: "text",
-      text: `Neon manifest valid for project ${manifest.project}.`,
+      text: `Neon manifest valid for project ${manifest.project}. Missing: ${missing.join(", ") || "none"}.`,
     }],
-    details: {},
+    details: { missingSecrets: missing },
   };
 }
 
@@ -95,14 +99,51 @@ async function planAction(
   const state = requireNeonState(await services.loadState("neon"));
   const environment = params.environment;
   const isRollback = "intent" in params && params.intent === "rollback";
+  // Resolve branch name early (needed for rollback plan too)
+  const branchName = manifest.branch?.name ?? manifest.project;
+
   if (isRollback) {
-    throw err("E_PHASE_UNSUPPORTED", "rollback is not supported for Neon provider");
+    // Resolve targetReleaseId to owned restore point
+    const targetReleaseId = (params as { targetReleaseId: string }).targetReleaseId;
+    const candidatePoints = (state.restorePoints ?? []).filter((rp) => rp.planId === targetReleaseId);
+    if (candidatePoints.length > 1) {
+      throw err("E_PRECONDITION", `multiple restore points found for release ${targetReleaseId}; specify planDigest to disambiguate`);
+    }
+    // Match on planDigest if available in params; otherwise use the single match
+    const planDigest = (params as { planDigest?: string }).planDigest;
+    const restorePoint = planDigest
+      ? candidatePoints.find((rp) => rp.planDigest === planDigest)
+      : candidatePoints[0];
+    if (!restorePoint) {
+      throw err("E_PRECONDITION", `no owned restore point for release ${targetReleaseId}${planDigest ? ` digest ${planDigest}` : ""}`);
+    }
+    const plan = buildNeonPlan(manifest, environment, "rollback", {
+      sourceBranchId: restorePoint.branchId,
+      restoreTimestamp: restorePoint.timestamp,
+      targetBranchId: state.branchIds[branchName],
+    });
+    // Digest binds restorePoint data — prevents substitution
+    await services.persistPlan("neon", plan);
+    const approval = await requestPlanApproval(ctx, {
+      planId: plan.planId,
+      planDigest: plan.planDigest,
+      title: `Approve rollback to ${environment}?`,
+      summary: renderNeonPlanSummary(plan),
+      metadata: { domain: "database", risk: "destructive" },
+    }, registry);
+    if (approval.approved && approval.approvedAt) {
+      await writeApprovalSidecar(cwd, plan.planId, plan.planDigest, approval.approvedAt, environment);
+    }
+    return {
+      content: [{ type: "text", text: `Plan ${plan.planId} created. Digest: ${plan.planDigest}. Approved: ${approval.approved}.` }],
+      details: { planId: plan.planId, planDigest: plan.planDigest, approved: approval.approved },
+    };
   }
 
   // Determine intent based on manifest and environment.
   // Provision takes priority when no project exists, even if migrations are configured.
   let intent: "provision" | "migration" | "preview" = "provision";
-  if (environment === "preview") {
+  if (environment === "preview" && state.projectId) {
     intent = "preview";
   } else if (!state.projectId) {
     intent = "provision";
@@ -154,6 +195,9 @@ async function applyAction(
 ): Promise<ToolResult> {
   const plan = requireNeonPlan(await services.loadPlan("neon", planId));
   const state = requireNeonState(await services.loadState("neon"));
+  if (plan.environment === "production" && plan.intent === "migration" && source.get("PI_SHIP_ALLOW_PRODUCTION_DB_WRITES") !== "true") {
+    throw err("E_APPROVAL_REQUIRED", "PI_SHIP_ALLOW_PRODUCTION_DB_WRITES must be 'true' for production database writes");
+  }
   await authorizeNeonPlanApply({ registry, cwd, plan, suppliedDigest: planDigest, signal });
 
   const doApply = () => {

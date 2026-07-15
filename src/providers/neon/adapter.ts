@@ -20,12 +20,19 @@ export interface CreatePreviewBranchResult {
   connectionUri: string;
 }
 
+export interface RestoreBranchParams {
+  sourceTimestamp: string;
+  sourceBranchId?: string;
+  preserveUnderName?: string;
+}
+
 export interface NeonAdapter {
   checkAuth(signal?: AbortSignal): Promise<{ ok: boolean; missing?: string[] }>;
   ensureProject(name: string, config?: { pgVersion?: number; regionId?: string }, signal?: AbortSignal): Promise<EnsureProjectResult>;
-  ensureBranch(projectId: string, name: string, parentId?: string, config?: { databaseName?: string; roleName?: string }, signal?: AbortSignal): Promise<EnsureBranchResult>;
+  ensureBranch(projectId: string, name: string, parentId?: string, config?: { databaseName?: string; roleName?: string; expiresAt?: string }, signal?: AbortSignal): Promise<EnsureBranchResult>;
   getConnectionUri(projectId: string, branchId: string, databaseName: string, roleName: string, signal?: AbortSignal): Promise<string>;
   createPreviewBranch(projectId: string, parentId: string, name: string, expiresAt?: string, signal?: AbortSignal): Promise<CreatePreviewBranchResult>;
+  restoreBranch(projectId: string, branchId: string, params: RestoreBranchParams, signal?: AbortSignal): Promise<void>;
 }
 
 export interface NeonAdapterConfig {
@@ -68,6 +75,13 @@ export function createNeonAdapter(
       const projects = await client.listProjects(signal);
       const existing = projects.find((p) => p.name === name);
       if (existing) {
+        if (config) {
+          const pgVersion = config.pgVersion ?? 16;
+          const regionId = config.regionId ?? "aws-us-east-1";
+          if (existing.pg_version !== pgVersion || existing.region_id !== regionId) {
+            throw err("E_STATE_CONFLICT", `existing project pg_version=${existing.pg_version} region_id=${existing.region_id} does not match requested pg_version=${pgVersion} region_id=${regionId}`);
+          }
+        }
         return { projectId: existing.id, projectName: existing.name, created: false };
       }
 
@@ -107,6 +121,7 @@ export function createNeonAdapter(
         branch: {
           name,
           ...(parentId ? { parent_id: parentId } : {}),
+          ...(config?.expiresAt ? { expires_at: config.expiresAt } : {}),
         },
         endpoints: [{ type: "read_write" }],
       };
@@ -151,6 +166,18 @@ export function createNeonAdapter(
       return { branchId: result.branch.id, connectionUri };
     },
 
-  
+    async restoreBranch(projectId, branchId, params, signal) {
+      const result = await client.restoreBranch(projectId, branchId, {
+        source_branch_id: params.sourceBranchId,
+        source_timestamp: params.sourceTimestamp,
+        ...(params.preserveUnderName ? { preserve_under_name: params.preserveUnderName } : {}),
+      }, signal);
+      if (result.operations?.length > 0) {
+        for (const op of result.operations) {
+          await client.pollOperation(projectId, op.id, pollTimeoutMs, signal);
+        }
+      }
+    },
+
   };
 }

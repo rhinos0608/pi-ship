@@ -45,7 +45,7 @@ export async function applyNeonPlan(ctx: ApplyNeonContext): Promise<ToolResult> 
       suppliedDigest: ctx.suppliedDigest,
       signal,
     });
-    const journal = await readJournal(cwd, plan.planId);
+    const journal = await readJournal(cwd, plan.planId, plan.planDigest);
     // Use latest entry per step by journal order (append-only, later entries are newer).
     // This prevents older terminal entries from masking newer incomplete/failed entries.
     const latestByStep = new Map<string, (typeof journal)[number]>();
@@ -55,10 +55,12 @@ export async function applyNeonPlan(ctx: ApplyNeonContext): Promise<ToolResult> 
     const completed = new Set(
       [...latestByStep.values()].filter((e) => e.status === "ok").map((e) => e.step),
     );
-    // Non-idempotent "migrate" step: throw if latest status is start or fail
-    const migrateEntry = latestByStep.get("migrate");
-    if (migrateEntry && (migrateEntry.status === "start" || migrateEntry.status === "fail")) {
-      throw err("E_STATE_CONFLICT", "journal contains incomplete non-idempotent migrate step; manual reconciliation required");
+    // Non-idempotent steps: throw if latest status is start or fail — manual reconciliation required.
+    for (const step of ["migrate", "restoreBranch"] as const) {
+      const entry = latestByStep.get(step);
+      if (entry && (entry.status === "start" || entry.status === "fail")) {
+        throw err("E_STATE_CONFLICT", `journal contains incomplete non-idempotent ${step} step; manual reconciliation required`);
+      }
     }
 
     if (state.history.some((h) => h.planId === plan.planId && h.digest === plan.planDigest && h.status === "ok")) {
@@ -80,17 +82,17 @@ export async function applyNeonPlan(ctx: ApplyNeonContext): Promise<ToolResult> 
 
     async function step(name: string, mutating: boolean, fn: () => Promise<void>) {
       if (completed.has(name)) return;
-      await appendJournal(cwd, { ts: new Date().toISOString(), planId: plan.planId, step: name, status: "start" });
+      await appendJournal(cwd, { ts: new Date().toISOString(), planId: plan.planId, planDigest: plan.planDigest, step: name, status: "start" });
       try {
         signal?.throwIfAborted();
         await fn();
         signal?.throwIfAborted();
-        await appendJournal(cwd, { ts: new Date().toISOString(), planId: plan.planId, step: name, status: "ok" });
+        await appendJournal(cwd, { ts: new Date().toISOString(), planId: plan.planId, planDigest: plan.planDigest, step: name, status: "ok" });
         completed.add(name);
       } catch (e) {
         const aborted = signal?.aborted || (e instanceof Error && (e.name === "AbortError" || e.message.includes("aborted")));
         const error = aborted ? err("E_CANCELLED", "operation cancelled", true) : (isShipError(e) ? e : err("E_PROVIDER", "provider operation failed"));
-        await appendJournal(cwd, { ts: new Date().toISOString(), planId: plan.planId, step: name, status: "fail", error });
+        await appendJournal(cwd, { ts: new Date().toISOString(), planId: plan.planId, planDigest: plan.planDigest, step: name, status: "fail", error });
         throw error;
       }
     }
@@ -154,18 +156,36 @@ export async function applyNeonPlan(ctx: ApplyNeonContext): Promise<ToolResult> 
           await stateStore.save(state);
         });
 
+        // Capture restore point before migration for rollback capability
+        await step("captureRestorePoint", true, async () => {
+          const restorePoint = {
+            planId: plan.planId,
+            planDigest: plan.planDigest,
+            projectId: state.projectId!,
+            branchId: state.branchIds[branchName],
+            timestamp: new Date().toISOString(),
+            at: new Date().toISOString(),
+          };
+          state.restorePoints = state.restorePoints ?? [];
+          state.restorePoints.push(restorePoint);
+          await stateStore.save(state);
+        });
+
         await step("migrate", true, async () => {
           const argv = plan.migrationCommand!;
           // Fetch fresh connection URI (with password) for migration
           const dbUri = await adapter.getConnectionUri(state.projectId!, state.branchIds[branchName], databaseName, roleName, signal);
           // Credential injection: scoped to subprocess lifetime only.
-          // DATABASE_URL is set in process.env for the duration of piExec.
-          // The boundary layer ensures no other tool can access it in exclusive mode.
+          // DATABASE_URL is set in process.env for the duration of piExec
+          // because pi's ExecOptions does not expose child-process env overrides.
+          // This is a known limitation: process.env is process-global, not
+          // isolated per-tool. The boundary layer warns on credential access
+          // in warn/exclusive modes but cannot fully prevent observation.
           const prevDbUrl = process.env.DATABASE_URL;
           process.env.DATABASE_URL = dbUri;
+          let result;
           try {
-            const result = await piExec(argv[0], argv.slice(1), { cwd, signal });
-            if (result.code !== 0) throw err("E_PROVIDER", "migration failed");
+            result = await piExec(argv[0], argv.slice(1), { cwd, signal });
           } finally {
             if (prevDbUrl !== undefined) {
               process.env.DATABASE_URL = prevDbUrl;
@@ -173,6 +193,7 @@ export async function applyNeonPlan(ctx: ApplyNeonContext): Promise<ToolResult> 
               delete process.env.DATABASE_URL;
             }
           }
+          if (result.code !== 0) throw err("E_PROVIDER", "migration failed");
         });
 
         await step("getConnectionUri", true, async () => {
@@ -191,21 +212,69 @@ export async function applyNeonPlan(ctx: ApplyNeonContext): Promise<ToolResult> 
 
         await step("createPreviewBranch", true, async () => {
           const previewName = `${branchName}-${plan.planId.slice(0, 8)}`;
-          const r = await adapter.createPreviewBranch(
-            state.projectId!,
-            parentBranchId,
-            previewName,
-            plan.previewExpiresAt,
-            signal,
+          // Reconcile deterministic preview name with Neon — reuse if already exists
+          const existing = await adapter.ensureBranch(
+            state.projectId!, previewName, parentBranchId,
+            { databaseName, roleName, expiresAt: plan.previewExpiresAt }, signal
           );
-          state.branchIds[previewName] = r.branchId;
-          state.connectionUris[previewName] = redactConnectionUri(r.connectionUri);
+          if (!existing.created) {
+            // Branch already exists from previous partial run
+            state.branchIds[previewName] = existing.branchId;
+            if (existing.connectionUri) {
+              state.connectionUris[previewName] = redactConnectionUri(existing.connectionUri);
+            }
+            await stateStore.save(state);
+            return;
+          }
+          state.branchIds[previewName] = existing.branchId;
+          if (existing.connectionUri) {
+            state.connectionUris[previewName] = redactConnectionUri(existing.connectionUri);
+          }
           await stateStore.save(state);
         });
         break;
       }
 
-        default: {
+      case "rollback": {
+        if (!plan.restoreTimestamp) {
+          throw err("E_PRECONDITION", "rollback plan missing restoreTimestamp");
+        }
+        const targetBranchId = plan.targetBranchId ?? state.branchIds[branchName];
+        if (!targetBranchId) {
+          throw err("E_PRECONDITION", "cannot determine target branch for rollback; provision first");
+        }
+
+        // Validate restore point binding: timestamp + project + branch must match.
+        // Plan digest integrity is verified separately by authorizeNeonPlanApply.
+        const restorePoint = state.restorePoints?.find(
+          (rp) =>
+            rp.projectId === state.projectId &&
+            rp.branchId === targetBranchId &&
+            rp.timestamp === plan.restoreTimestamp,
+        );
+        if (!restorePoint) {
+          throw err("E_STATE_CONFLICT", "rollback restore point not found or does not match plan binding");
+        }
+
+        const preserveUnderName = `${branchName}_old_${Date.now()}`;
+
+        await step("restoreBranch", true, async () => {
+          await adapter.restoreBranch(state.projectId!, targetBranchId, {
+            sourceTimestamp: plan.restoreTimestamp!,
+            sourceBranchId: plan.sourceBranchId,
+            preserveUnderName,
+          }, signal);
+        });
+
+        await step("getConnectionUri", true, async () => {
+          const uri = await adapter.getConnectionUri(state.projectId!, targetBranchId, databaseName, roleName, signal);
+          state.connectionUris[branchName] = redactConnectionUri(uri);
+          await stateStore.save(state);
+        });
+        break;
+      }
+
+      default: {
         throw err("E_CONFIG_INVALID", `unknown plan intent: ${(plan as { intent: string }).intent}`);
       }
     }

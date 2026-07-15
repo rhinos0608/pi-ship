@@ -117,7 +117,7 @@ export interface RestoreBranchResponse {
 export interface ListProjectsResponse {
   projects: NeonProject[];
   /** Cursor-based pagination — cursor is opaque string */
-  cursor?: string;
+  pagination?: { cursor?: string };
 }
 
 // ── Fetch type ───────────────────────────────────────────────────────────
@@ -241,12 +241,16 @@ export function createNeonClient(
           throw err("E_AUTH_MISSING", message);
         }
         if (res.status === 404) {
-          throw err("E_PROVIDER", message);
+          const shipErr = err("E_PROVIDER", message);
+          shipErr.details = { status: res.status };
+          throw shipErr;
         }
         if (res.status === 409) {
-          throw err("E_PROVIDER", message);
+          const shipErr = err("E_PROVIDER", message);
+          shipErr.details = { status: res.status };
+          throw shipErr;
         }
-        const retryable = res.status === 429 || res.status >= 500;
+        const retryable = res.status === 429 || res.status === 503 || res.status === 423 || res.status === 500 || res.status === 502 || res.status === 504;
         const shipErr = err("E_PROVIDER", message, retryable);
         if (!shipErr.details) shipErr.details = {};
         (shipErr.details as Record<string, unknown>).status = res.status;
@@ -268,9 +272,9 @@ export function createNeonClient(
     do {
       const path = cursor ? `/projects?cursor=${encodeURIComponent(cursor)}` : "/projects";
       const { body } = await request("GET", path, { signal });
-      const resp = body as { projects: NeonProject[]; cursor?: string } | undefined;
+      const resp = body as { projects: NeonProject[]; pagination?: { cursor?: string } } | undefined;
       if (resp?.projects) projects.push(...resp.projects);
-      cursor = resp?.cursor;
+      cursor = resp?.pagination?.cursor;
     } while (cursor);
     return projects;
   }
@@ -281,28 +285,50 @@ export function createNeonClient(
     timeoutMs = 60_000,
     signal?: AbortSignal,
   ): Promise<NeonOperation> {
-    const deadline = Date.now() + timeoutMs;
-    let lastStatus: string | undefined;
-
-    while (Date.now() < deadline) {
-      signal?.throwIfAborted();
-      const { body } = await request("GET", `/projects/${encodeURIComponent(projectId)}/operations/${encodeURIComponent(operationId)}`, { signal });
-      const op = body as NeonOperation;
-      if (op.status === "finished") return op;
-      if (op.status === "failed") {
-        const msg = op.error?.message ?? "Neon operation failed";
-        throw err("E_PROVIDER", safeMsg(msg));
-      }
-      if (op.status === "cancelled") {
-        throw err("E_CANCELLED", "Neon operation cancelled", true);
-      }
-      if (op.status !== lastStatus) {
-        lastStatus = op.status;
-      }
-      await delay(pollIntervalMs, signal);
+    // Fail fast if parent signal already aborted at entry
+    if (signal?.aborted) {
+      throw err("E_CANCELLED", "operation cancelled", true);
     }
 
-    throw err("E_PROVIDER", "Neon operation timed out", true);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    function onParentAbort() { controller.abort(); }
+    signal?.addEventListener("abort", onParentAbort, { once: true });
+
+    const combinedSignal = controller.signal;
+    let lastStatus: string | undefined;
+
+    try {
+      while (true) {
+        combinedSignal.throwIfAborted();
+        const { body } = await request("GET", `/projects/${encodeURIComponent(projectId)}/operations/${encodeURIComponent(operationId)}`, { signal: combinedSignal });
+        const op = body as NeonOperation;
+        if (op.status === "finished") return op;
+        if (op.status === "failed") {
+          const msg = op.error?.message ?? "Neon operation failed";
+          throw err("E_PROVIDER", safeMsg(msg));
+        }
+        if (op.status === "cancelled") {
+          throw err("E_CANCELLED", "Neon operation cancelled", true);
+        }
+        if (op.status !== lastStatus) {
+          lastStatus = op.status;
+        }
+        await delay(pollIntervalMs, combinedSignal);
+      }
+    } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") {
+        // Distinguish parent-signal cancellation from timeout
+        if (signal?.aborted) {
+          throw err("E_CANCELLED", "operation cancelled", true);
+        }
+        throw err("E_PROVIDER", "Neon operation timed out", true);
+      }
+      throw e;
+    } finally {
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", onParentAbort);
+    }
   }
 
   return {

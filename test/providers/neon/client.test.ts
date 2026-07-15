@@ -321,19 +321,19 @@ describe("NeonClient", () => {
       await expect(client.listProjects()).rejects.toMatchObject({ code: "E_PROVIDER", retryable: true });
     });
 
-    it("500 maps to E_PROVIDER retryable", async () => {
-      const client = createNeonClient({ apiKey: "key" }, async () => fakeError(500, "server error"));
+    it("503 maps to E_PROVIDER retryable", async () => {
+      const client = createNeonClient({ apiKey: "key" }, async () => fakeError(503, "server error"));
       await expect(client.listProjects()).rejects.toMatchObject({ code: "E_PROVIDER", retryable: true });
     });
   });
 
   describe("cursor-based pagination", () => {
     it("follows cursor until undefined", async () => {
-      let callCount = 0;
+      const requestedUrls: string[] = [];
       const fetchImpl: NeonFetchLike = async (url) => {
-        callCount++;
-        if (callCount === 1) {
-          return fakeOk({ projects: [{ id: "p1", name: "a" }], cursor: "next-page" });
+        requestedUrls.push(typeof url === "string" ? url : String(url));
+        if (requestedUrls.length === 1) {
+          return fakeOk({ projects: [{ id: "p1", name: "a" }], pagination: { cursor: "next-page" } });
         }
         return fakeOk({ projects: [{ id: "p2", name: "b" }] });
       };
@@ -342,7 +342,8 @@ describe("NeonClient", () => {
       expect(result).toHaveLength(2);
       expect(result[0].id).toBe("p1");
       expect(result[1].id).toBe("p2");
-      expect(callCount).toBe(2);
+      expect(requestedUrls).toHaveLength(2);
+      expect(requestedUrls[1]).toContain("cursor=next-page");
     });
 
     it("stops when cursor is undefined", async () => {

@@ -7,6 +7,7 @@ import { err, isShipError, type ShipError } from "../../core/errors.js";
 export interface JournalEntry {
   ts: string;
   planId: string;
+  planDigest?: string;
   step: string;
   status: "start" | "ok" | "fail";
   resourceRef?: string;
@@ -23,6 +24,7 @@ const ErrorSchema = Type.Object({
 export const JournalEntrySchema = Type.Object({
   ts: Type.String(),
   planId: Type.String(),
+  planDigest: Type.Optional(Type.String()),
   step: Type.String(),
   status: Type.Union([Type.Literal("start"), Type.Literal("ok"), Type.Literal("fail")]),
   resourceRef: Type.Optional(Type.String()),
@@ -54,7 +56,7 @@ function plainError(error: ShipError): NonNullable<JournalEntry["error"]> {
   };
 }
 
-export async function readJournal(cwd: string, planId?: string): Promise<JournalEntry[]> {
+export async function readJournal(cwd: string, planId?: string, planDigest?: string): Promise<JournalEntry[]> {
   let text: string;
   try {
     text = await readFile(journalPath(cwd), "utf8");
@@ -76,7 +78,9 @@ export async function readJournal(cwd: string, planId?: string): Promise<Journal
     if (!Value.Check(JournalEntrySchema, normalized)) {
       throw err("E_STATE_CONFLICT", "journal entry has invalid shape");
     }
-    if (!planId || normalized.planId === planId) entries.push(normalized);
+    if (planId && normalized.planId !== planId) continue;
+    if (planDigest && normalized.planDigest !== planDigest) continue;
+    entries.push(normalized);
   }
   return entries;
 }

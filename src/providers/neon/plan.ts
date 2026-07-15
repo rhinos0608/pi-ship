@@ -15,11 +15,13 @@ export const NeonPlanSchema = Type.Object({
   planDigest: Type.String({ minLength: 1 }),
   provider: Type.Literal("neon"),
   environment: Type.Union([Type.Literal("development"), Type.Literal("preview"), Type.Literal("production")]),
-  intent: Type.Union([Type.Literal("provision"), Type.Literal("migration"), Type.Literal("preview")]),
+  intent: Type.Union([Type.Literal("provision"), Type.Literal("migration"), Type.Literal("preview"), Type.Literal("rollback")]),
   manifest: NeonManifestSchema,
   secretNames: Type.Array(Type.String()),
   migrationCommand: Type.Optional(Type.Array(Type.String(), { minItems: 1 })),
   previewExpiresAt: Type.Optional(Type.String({ minLength: 1 })),
+  restoreTimestamp: Type.Optional(Type.String({ minLength: 1 })),
+  targetBranchId: Type.Optional(Type.String({ minLength: 1 })),
   sourceBranchId: Type.Optional(Type.String({ minLength: 1 })),
 
   createdAt: Type.String({ minLength: 1 }),
@@ -32,6 +34,8 @@ export interface BuildNeonPlanOptions {
   createdAt?: string;
   migrationCommand?: string[];
   previewExpiresAt?: string;
+  restoreTimestamp?: string;
+  targetBranchId?: string;
   sourceBranchId?: string;
 
 }
@@ -51,9 +55,23 @@ export function isNeonPlan(value: unknown): value is NeonPlan {
 export function buildNeonPlan(
   manifest: NeonManifest,
   environment: Environment,
-  intent: "provision" | "migration" | "preview",
+  intent: "provision" | "migration" | "preview" | "rollback",
   options: BuildNeonPlanOptions = {},
 ): NeonPlan {
+  if (intent === "migration" && (!options.migrationCommand || !options.migrationCommand.length)) {
+    throw err("E_CONFIG_INVALID", "migrationCommand is required for migration intent");
+  }
+  if (intent === "rollback") {
+    if (!options.restoreTimestamp) {
+      throw err("E_CONFIG_INVALID", "restoreTimestamp is required for rollback intent");
+    }
+    if (!options.sourceBranchId) {
+      throw err("E_CONFIG_INVALID", "sourceBranchId is required for rollback intent");
+    }
+    if (!options.targetBranchId) {
+      throw err("E_CONFIG_INVALID", "targetBranchId is required for rollback intent");
+    }
+  }
   const secretNames: string[] = ["NEON_API_KEY"];
   if (intent === "migration") {
     secretNames.push("DATABASE_URL");
@@ -68,6 +86,8 @@ export function buildNeonPlan(
     secretNames,
     migrationCommand: options.migrationCommand,
     previewExpiresAt: options.previewExpiresAt,
+    restoreTimestamp: options.restoreTimestamp,
+    targetBranchId: options.targetBranchId,
     sourceBranchId: options.sourceBranchId,
 
     createdAt: options.createdAt ?? new Date().toISOString(),

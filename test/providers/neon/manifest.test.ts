@@ -85,6 +85,32 @@ describe("NeonManifest", () => {
     expect(isNeonManifest(m)).toBe(false);
   });
 
+  it("compute rejects minCu below 0.25", () => {
+    const m = { ...valid, compute: { minCu: 0 } };
+    expect(isNeonManifest(m)).toBe(false);
+  });
+
+  it("compute rejects non-discrete CU size", () => {
+    const m = { ...valid, compute: { minCu: 0.3 } };
+    expect(isNeonManifest(m)).toBe(true);
+    expect(() => validateNeonManifest(m)).toThrow();
+  });
+
+  it("compute validates minCu <= maxCu", () => {
+    const m = { ...valid, compute: { minCu: 2, maxCu: 1 } };
+    expect(isNeonManifest(m)).toBe(true);
+    expect(() => validateNeonManifest(m)).toThrow();
+  });
+
+  it("compute accepts valid discrete CU sizes", () => {
+    expect(isNeonManifest({ ...valid, compute: { minCu: 0.25 } })).toBe(true);
+    expect(isNeonManifest({ ...valid, compute: { minCu: 0.5 } })).toBe(true);
+    expect(isNeonManifest({ ...valid, compute: { minCu: 1, maxCu: 4 } })).toBe(true);
+    expect(() => validateNeonManifest({ ...valid, compute: { minCu: 0.25 } })).not.toThrow();
+    expect(() => validateNeonManifest({ ...valid, compute: { minCu: 0.5 } })).not.toThrow();
+    expect(() => validateNeonManifest({ ...valid, compute: { minCu: 1, maxCu: 4 } })).not.toThrow();
+  });
+
   it("migrations optional fields accepted", () => {
     const m = { ...valid, migrations: { command: ["npx", "prisma", "migrate", "deploy"] } };
     expect(isNeonManifest(m)).toBe(true);
@@ -101,7 +127,7 @@ describe("NeonManifest", () => {
       pgVersion: 15,
       regionId: "aws-us-west-2",
       branch: { name: "dev", databaseName: "devdb", roleName: "devrole" },
-      compute: { minCu: 0, maxCu: 2, suspendTimeoutSeconds: 600 },
+      compute: { minCu: 0.5, maxCu: 2, suspendTimeoutSeconds: 600 },
       migrations: { command: ["npx", "prisma", "migrate", "deploy"] },
     };
     expect(isNeonManifest(m)).toBe(true);

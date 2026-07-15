@@ -93,6 +93,42 @@ describe("buildNeonPlan", () => {
   it("generates createdAt when not provided", () => {
     const plan = buildNeonPlan(baseManifest, "production", "provision");
     expect(plan.createdAt).toBeDefined();
-    expect(() => new Date(plan.createdAt)).not.toThrow();
+    expect(Number.isFinite(Date.parse(plan.createdAt!))).toBe(true);
+  });
+
+  describe("rollback intent", () => {
+    it("produces correct plan for rollback intent with restoreTimestamp and sourceBranchId", () => {
+      const plan = buildNeonPlan(baseManifest, "production", "rollback", fixedOpts({
+        restoreTimestamp: "2026-01-10T12:00:00.000Z",
+        sourceBranchId: "br-source-1",
+        targetBranchId: "br-target-1",
+      }));
+      expect(plan.intent).toBe("rollback");
+      expect(plan.restoreTimestamp).toBe("2026-01-10T12:00:00.000Z");
+      expect(plan.sourceBranchId).toBe("br-source-1");
+      expect(plan.targetBranchId).toBe("br-target-1");
+      expect(plan.planDigest).toBeDefined();
+      expect(plan.planDigest.length).toBeGreaterThan(0);
+      expect(plan.secretNames).toEqual(["NEON_API_KEY"]);
+    });
+
+    it("requires restoreTimestamp for rollback intent", () => {
+      expect(() => buildNeonPlan(baseManifest, "production", "rollback", fixedOpts({
+        sourceBranchId: "br-source-1",
+      }))).toThrow();
+    });
+
+    it("requires sourceBranchId for rollback intent", () => {
+      expect(() => buildNeonPlan(baseManifest, "production", "rollback", fixedOpts({
+        restoreTimestamp: "2026-01-10T12:00:00.000Z",
+      }))).toThrow();
+    });
+
+    it("binds restoreTimestamp into plan digest (prevents substitution)", () => {
+      const opts = { planId: "rb-digest-1", createdAt: "2026-01-01T00:00:00.000Z", restoreTimestamp: "2026-01-10T12:00:00.000Z", sourceBranchId: "br-1", targetBranchId: "br-2" };
+      const p1 = buildNeonPlan(baseManifest, "production", "rollback", opts);
+      const p2 = buildNeonPlan(baseManifest, "production", "rollback", { ...opts, restoreTimestamp: "2026-01-10T13:00:00.000Z" });
+      expect(p1.planDigest).not.toBe(p2.planDigest);
+    });
   });
 });

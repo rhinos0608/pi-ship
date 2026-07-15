@@ -32,6 +32,15 @@ const HistoryEntry = Type.Object({
   at: Type.String({ minLength: 1 }),
 }, Strict);
 
+const RestorePointEntry = Type.Object({
+  planId: Type.String({ minLength: 1 }),
+  planDigest: Type.String({ minLength: 1 }),
+  projectId: Type.String({ minLength: 1 }),
+  branchId: Type.String({ minLength: 1 }),
+  timestamp: Type.String({ minLength: 1 }),
+  at: Type.String({ minLength: 1 }),
+}, Strict);
+
 export const NeonStateSchema = Type.Object({
   provider: Type.Literal("neon"),
   version: Type.Literal(1),
@@ -40,6 +49,7 @@ export const NeonStateSchema = Type.Object({
   branchIds: Type.Record(Type.String(), Type.String()),
   connectionUris: Type.Record(Type.String(), Type.String()),
   history: Type.Array(HistoryEntry),
+  restorePoints: Type.Optional(Type.Array(RestorePointEntry)),
 }, Strict);
 
 export type NeonState = Static<typeof NeonStateSchema>;
@@ -51,6 +61,7 @@ export function defaultNeonState(): NeonState {
     branchIds: {},
     connectionUris: {},
     history: [],
+    restorePoints: [],
   };
 }
 

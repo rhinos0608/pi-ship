@@ -16,8 +16,8 @@ export const NeonManifestSchema = Type.Object({
     roleName: Type.Optional(Type.String({ minLength: 1 })),
   }, Strict)),
   compute: Type.Optional(Type.Object({
-    minCu: Type.Optional(Type.Integer({ minimum: 0 })),
-    maxCu: Type.Optional(Type.Integer({ minimum: 0 })),
+    minCu: Type.Optional(Type.Number({ minimum: 0.25 })),
+    maxCu: Type.Optional(Type.Number({ minimum: 0.25 })),
     suspendTimeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
   }, Strict)),
   migrations: Type.Optional(Type.Object({
@@ -58,8 +58,33 @@ function formatNeonManifestError(value: unknown): string {
   return first ? `${path} ${first.message}` : "manifest validation failed";
 }
 
+function computeCuError(cu: number, label: string): string | undefined {
+  // Neon CU sizes must be multiples of 0.25
+  if (cu !== Math.round(cu * 4) / 4) {
+    return `${label} ${cu} is not a valid CU size (must be multiple of 0.25)`;
+  }
+  return undefined;
+}
+
 export function validateNeonManifest(value: unknown): asserts value is NeonManifest {
   if (!Value.Check(NeonManifestSchema, value)) {
     throw err("E_CONFIG_INVALID", formatNeonManifestError(value));
+  }
+  const m = value as Record<string, unknown>;
+  const compute = m.compute as Record<string, unknown> | undefined;
+  if (compute) {
+    const minCu = compute.minCu as number | undefined;
+    const maxCu = compute.maxCu as number | undefined;
+    if (minCu !== undefined) {
+      const cuErr = computeCuError(minCu, "minCu");
+      if (cuErr) throw err("E_CONFIG_INVALID", `compute.${cuErr}`);
+    }
+    if (maxCu !== undefined) {
+      const cuErr = computeCuError(maxCu, "maxCu");
+      if (cuErr) throw err("E_CONFIG_INVALID", `compute.${cuErr}`);
+    }
+    if (minCu !== undefined && maxCu !== undefined && minCu > maxCu) {
+      throw err("E_CONFIG_INVALID", "compute.minCu must be <= compute.maxCu");
+    }
   }
 }

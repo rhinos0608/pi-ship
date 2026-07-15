@@ -71,11 +71,10 @@ async function planMigration(
     throw err("E_CONFIG_INVALID", "manifest missing migrations.command");
   }
 
-  if (environment === "production") {
-    throw err("E_APPROVAL_REQUIRED", "production migration requires explicit approval");
-  }
-
   const state = requireState(await services.loadState("neon"));
+  if (!state.projectId) {
+    throw err("E_PRECONDITION", "Neon project not provisioned; run provision first");
+  }
   const plan = buildNeonPlan(manifest, environment, "migration", {
     migrationCommand: manifest.migrations.command,
   });
@@ -124,6 +123,9 @@ async function applyMigration(
   if (plan.environment !== environment) {
     throw err("E_STATE_CONFLICT", "plan environment does not match current operational environment");
   }
+  if (plan.intent !== "migration") {
+    throw err("E_PRECONDITION", "plan intent must be migration; cannot apply " + plan.intent + " plan via db ops");
+  }
 
   if (plan.environment === "production" && source.get("PI_SHIP_ALLOW_PRODUCTION_DB_WRITES") !== "true") {
     throw err("E_APPROVAL_REQUIRED", "PI_SHIP_ALLOW_PRODUCTION_DB_WRITES must be 'true' for production database writes");
@@ -161,17 +163,11 @@ export const handleNeonDatabaseOps: DatabaseHandler = async (params, context) =>
   };
 
   switch (params.action) {
-    case "inspect":
-      return { content: [{ type: "text", text: "Database inspection unavailable via Neon provider." }], details: {} };
-    case "migration_status":
-      return { content: [{ type: "text", text: "Migration status requires database connection." }], details: {} };
-    case "browse":
-    case "query":
-    case "plan":
-      throw err("E_PHASE_UNSUPPORTED", `DB.${params.action} is unsupported via Neon provider`);
     case "plan_migration":
       return planMigration(cwd, manifest, environment, ctx, registry, services);
     case "apply_plan":
       return applyMigration(pi, cwd, manifest, environment, params.planId, params.planDigest, envReader, credentialSource, registry, signal, services);
+    default:
+      throw err("E_PHASE_UNSUPPORTED", `DB.${params.action} is unsupported via Neon provider`);
   }
 };
