@@ -195,11 +195,14 @@ describe("cloud-free Vercel acceptance lifecycle", () => {
       expect(fakeState.envValues.get("APP_SECRET")).toBe("acceptance-app-secret");
 
       const status = await invoke({ action: "status" });
-      expect(status.details).toMatchObject({ status: "ready", releaseId: "deployment-1" });
+      // status/details are now spotlighted by defendToolResult
+      expect(status.details.status).toContain("ready");
+      expect(status.details.releaseId).toContain("deployment-1");
       const logs = await invoke({ action: "logs", lines: 100 });
-      expect(logs.content[0]?.text).toContain("application ready");
-      expect(logs.content[0]?.text).toContain("***");
-      expect(logs.content[0]?.text).not.toContain("acceptance-app-secret");
+      // content[0] is the spotlighting preamble, content[1] is the wrapped logs
+      expect(logs.content[1]?.text).toContain("application ready");
+      expect(logs.content[1]?.text).toContain("***");
+      expect(logs.content[1]?.text).not.toContain("acceptance-app-secret");
 
       const productionPlan = await invoke({ action: "plan", environment: "production" }) as PlanResponse;
       expect(productionPlan.details.approved).toBe(true);

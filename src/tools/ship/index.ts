@@ -7,6 +7,7 @@ import { shipSchema, type ShipInput } from "./schema.js";
 import type { ShipHandlerContext, ApprovedPlanBinding } from "./contracts.js";
 import { mintCapability } from "../../boundary/capability.js";
 import type { CredentialVault } from "../../boundary/vault.js";
+import { defendToolResult } from "../../defense/spotlight.js";
 
 export type { ShipInput } from "./schema.js";
 export { shipSchema } from "./schema.js";
@@ -103,9 +104,17 @@ export function registerShip(
       // go through runApprovedOperation inside the handler.
       const isMutating = params.action === "apply_plan";
       const invoke = () => handler(params, handlerContext);
-      return isMutating
+      const result = await (isMutating
         ? invoke()
-        : deps.vault ? deps.vault.runTrusted(invoke) : invoke();
+        : deps.vault ? deps.vault.runTrusted(invoke) : invoke());
+
+      // ── Defend externally-sourced results ───────────────────────────
+      // Status and logs return provider API responses — untrusted data.
+      // plan/apply_plan/validate return internal metadata only (plan IDs,
+      // digests, status codes) — no external trust boundary crossed.
+      const shouldDefend =
+        params.action === "logs" || params.action === "status";
+      return shouldDefend ? defendToolResult(result) : result;
     },
   });
 }

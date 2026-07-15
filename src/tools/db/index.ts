@@ -2,6 +2,7 @@ import { access } from "node:fs/promises";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { defendToolResult } from "../../defense/spotlight.js";
 import { Value } from "typebox/value";
 import { ApprovalRegistry, requestPlanApproval } from "../../core/approval.js";
 import { canonicalize } from "../../core/canonicalize.js";
@@ -79,10 +80,10 @@ export function registerDB(
       if (params.action === "inspect") {
         const url = requireDatabaseUrl(credentialSource);
         const result = await inspectDatabase(url, clientFactory, signal);
-        return {
+        return defendToolResult({
           content: [{ type: "text", text: `Inspected ${result.schemas.length} schemas, ${result.relations.length} relations` }],
           details: result as unknown as Record<string, unknown>,
-        };
+        });
       }
 
       if (params.action === "browse") {
@@ -96,10 +97,10 @@ export function registerDB(
           limit: params.limit ?? 100,
           offset: params.offset ?? 0,
         }, signal);
-        return {
+        return defendToolResult({
           content: [{ type: "text", text: `Browsed ${result.rowCount} rows from ${result.schema}.${result.table}${result.hasMore ? " (truncated)" : ""}` }],
           details: { columns: result.columns, rows: result.rows, rowCount: result.rowCount, hasMore: result.hasMore, schema: result.schema, table: result.table },
-        };
+        });
       }
 
       if (params.action === "query") {
@@ -111,10 +112,10 @@ export function registerDB(
           limit: params.limit,
           signal,
         });
-        return {
+        return defendToolResult({
           content: [{ type: "text", text: `Query returned ${result.rowCount} rows${result.hasMore ? " (truncated)" : ""}` }],
           details: { columns: result.columns, rows: result.rows, rowCount: result.rowCount, hasMore: result.hasMore },
-        };
+        });
       }
 
       // ── Plan action (shared, persisted, no client) ──────────────────
@@ -190,10 +191,10 @@ export function registerDB(
           const planLabel = entry.planId.slice(0, 12);
           lines.push(`  [${kind}] ${planLabel}  ${entry.status}  at ${entry.at}${errInfo}`);
         }
-        return {
+        return defendToolResult({
           content: [{ type: "text", text: lines.join("\n") }],
           details: { count: entries.length, entries: entries.map((e) => ({ planId: e.planId, planDigest: e.planDigest, status: e.status, at: e.at, errorCode: e.errorCode, planKind: e.planKind })) },
-        };
+        });
       }
 
       // ── Provider-dispatched actions ─────────────────────────────────

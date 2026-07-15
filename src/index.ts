@@ -7,6 +7,7 @@ import { providerRegistry } from "./providers/registry.js";
 import { environmentSource } from "./core/environment.js";
 import { registerBoundary } from "./boundary/integration/register.js";
 
+export { spotlightingPreamble, defendToolResult, type SpotlightingPolicy } from "./defense/index.js";
 export { registerShip } from "./tools/ship/index.js";
 export type { ShipHandler, ShipHandlerContext } from "./tools/ship/contracts.js";
 export type { ShipInput } from "./tools/ship/schema.js";

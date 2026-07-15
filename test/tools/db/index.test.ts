@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Value } from "typebox/value";
 import { DBFilterSchema, DBOrderSchema, DBSchema, DBValueSchema, type DBInput } from "../../../src/tools/db/schema.js";
+import type { ToolResult } from "../../../src/core/types.js";
 import { registerDB } from "../../../src/tools/db/index.js";
 import { ApprovalRegistry } from "../../../src/core/approval.js";
 import type { DatabaseClient, DatabaseClientFactory } from "../../../src/database/client.js";
@@ -96,8 +97,8 @@ describe("DB tool", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({ name: "DB", parameters: DBSchema });
     // Inspect without manifest -> uses shared read kernel, returns catalog results
-    await expect(execute("id", { action: "inspect" } as DBInput, undefined, undefined, { cwd }))
-      .resolves.toMatchObject({ content: [{ text: expect.stringContaining("Inspected") }] });
+    const inspectResult = await execute("id", { action: "inspect" } as DBInput, undefined, undefined, { cwd }) as ToolResult;
+    expect(inspectResult.content[1].text).toContain("Inspected");
   });
 
   it("requires environment source before every dispatch and rejects non-finite values", async () => {
@@ -176,10 +177,8 @@ describe("DB tool", () => {
       status: "committed",
       at,
     });
-    const result = await execute("id", { action: "migration_status" }, undefined, undefined, { cwd });
-    expect(result).toMatchObject({
-      content: [{ text: expect.stringContaining("Found 1 migration entry") }],
-    });
+    const result = await execute("id", { action: "migration_status" }, undefined, undefined, { cwd }) as ToolResult;
+    expect(result.content[1].text).toContain("Found 1 migration entry");
   });
 
   it("plans without manifest, persists redacted result, retains exact payload until cleanup", async () => {
