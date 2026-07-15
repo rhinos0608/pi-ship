@@ -6,6 +6,8 @@ import { err } from "../core/errors.js";
 import { persistPlan, loadPlan } from "../persistence/plan-store.js";
 import type { Environment } from "../core/types.js";
 import type { Classification, RiskLevel, StatementDescriptor } from "./classifier.js";
+import type { DatabaseTarget } from "./target.js";
+import { fingerprintLocalTarget } from "./target.js";
 
 export function hash(v: unknown): string {
   return createHash("sha256").update(typeof v === "string" ? v : canonicalize(v)).digest("hex");
@@ -189,12 +191,22 @@ export async function loadDatabasePlan(cwd: string, planId: string): Promise<Dat
 
 /**
  * Compute a deterministic fingerprint for the database target.
- * Normalize postgres/postgresql protocol identity.
- * Throws E_AUTH_MISSING when DATABASE_URL is missing, E_CONFIG_INVALID when malformed.
+ * Accepts a URL string, a DatabaseTarget object, or undefined.
+ * Normalize postgres/postgresql protocol identity for remote targets.
+ * Throws E_AUTH_MISSING when undefined, E_CONFIG_INVALID when malformed.
  * URL/password never appear in result or error messages.
  */
-export function fingerprintTarget(databaseUrl: string | undefined): string {
-  if (!databaseUrl) throw err("E_AUTH_MISSING", "DATABASE_URL missing");
+export function fingerprintTarget(target: string | DatabaseTarget | undefined): string {
+  if (target === undefined) throw err("E_AUTH_MISSING", "DATABASE_URL missing");
+  if (typeof target === "object") {
+    if (target.kind === "remote") return fingerprintRemoteURL(target.url);
+    if (target.kind === "local") return fingerprintLocalTarget(target.dataDir);
+    return hash({ kind: "file", dialect: "sqlite", path: target.path });
+  }
+  return fingerprintRemoteURL(target);
+}
+
+function fingerprintRemoteURL(databaseUrl: string): string {
   try {
     const url = new URL(databaseUrl);
     const protocol = url.protocol.slice(0, -1);

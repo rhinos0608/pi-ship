@@ -57,6 +57,22 @@ export const DBSchema = Type.Union([
     planId: Type.String({ minLength: 1 }),
     planDigest: Type.String({ minLength: 1 }),
   }, strict),
+  Type.Object({
+    action: Type.Literal("import"),
+    table: Type.String({ minLength: 1, maxLength: 100000 }),
+    format: Type.Union([Type.Literal("json"), Type.Literal("csv")]),
+    path: Type.Optional(Type.String({ minLength: 1, maxLength: 10000 })),
+    rows: Type.Optional(
+      Type.Array(
+        Type.Object({}, { additionalProperties: true }),
+        { maxItems: 5000 },
+      ),
+    ),
+    mode: Type.Optional(Type.Union([Type.Literal("create"), Type.Literal("append")])),
+  }, strict),
+  Type.Object({
+    action: Type.Literal("reset"),
+  }, strict),
 ]);
 
 export type DBInput = Static<typeof DBSchema>;

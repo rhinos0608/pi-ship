@@ -6,7 +6,7 @@ export function createDatabaseResource(overrides: Partial<Omit<ProtectedResource
     name: overrides.name ?? "production-database",
     credentialNames: overrides.credentialNames ?? ["DATABASE_URL"],
     hostnames: overrides.hostnames ?? [],
-    ports: overrides.ports ?? [5432],
+    ports: overrides.ports ?? [5432, 3306],
     filePaths: overrides.filePaths ?? [],
     allowedExecutors: overrides.allowedExecutors ?? ["DB"],
   };
