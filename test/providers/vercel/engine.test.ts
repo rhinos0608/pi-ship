@@ -28,7 +28,7 @@ async function fixture() {
     worktreeHash: "w",
   });
   const registry = new ApprovalRegistry(cwd);
-  registry.approve(plan.planId, plan.planDigest, cwd);
+  registry.approve(plan.planId, plan.planDigest, cwd, { domain: "deployment", risk: "destructive" });
   return { cwd, plan, registry };
 }
 
@@ -58,8 +58,8 @@ function context(f: Awaited<ReturnType<typeof fixture>>, provider = runtime()) {
     ...f,
     manifest,
     suppliedDigest: f.plan.planDigest,
-    runtime: provider,
-    secretValues: {},
+    createRuntime: () => provider,
+    loadSecrets: () => ({}),
     currentSource: { gitCommit: "g", worktreeHash: "w", sourceFingerprint: "src" },
   };
 }
@@ -293,7 +293,7 @@ describe("V2 engine", () => {
       worktreeHash: "w",
     });
     const registry = new ApprovalRegistry(cwd);
-    registry.approve(plan.planId, plan.planDigest, cwd);
+    registry.approve(plan.planId, plan.planDigest, cwd, { domain: "deployment", risk: "destructive" });
     let upsertCalls = 0;
     let projectExists = false;
     const fetchImpl = async (url: string, init?: RequestInit) => {
@@ -329,8 +329,8 @@ describe("V2 engine", () => {
       plan,
       manifest: secretManifest,
       suppliedDigest: plan.planDigest,
-      runtime,
-      secretValues: { MY_SECRET: "v1" },
+      createRuntime: () => runtime,
+      loadSecrets: () => ({ MY_SECRET: "v1" }),
       currentSource: { gitCommit: "g", worktreeHash: "w", sourceFingerprint: "src" },
       registry,
     };

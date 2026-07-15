@@ -1,8 +1,16 @@
 import { describe, expect, it } from "vitest";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import piShipExtension from "../src/index.js";
 
 describe("piShipExtension", () => {
-  it("registers tools, gate, commands, and shutdown listener", () => {
+  it("registers tools, gate, commands, and shutdown listener", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-ship-test-"));
+    writeFileSync(join(dir, "pi-ship.json"), JSON.stringify({ provider: "railway", version: 1, name: "test", project: "test-project", run: { command: ["echo"] } }));
+    const originalCwd = process.cwd;
+    process.cwd = () => dir;
+    try {
     const tools: string[] = [];
     const commands: string[] = [];
     const events: string[] = [];
@@ -17,7 +25,7 @@ describe("piShipExtension", () => {
         events.push(event);
       },
     };
-    piShipExtension(pi as unknown as never);
+    await piShipExtension(pi as unknown as never);
 
     expect(tools).toContain("ship");
     expect(tools).toContain("DB");
@@ -35,5 +43,8 @@ describe("piShipExtension", () => {
     );
     expect(events).toContain("tool_call");
     expect(events).toContain("session_shutdown");
+    } finally {
+      process.cwd = originalCwd;
+    }
   });
 });

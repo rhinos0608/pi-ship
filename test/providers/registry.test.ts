@@ -9,8 +9,8 @@ import { vercelProviderPackage } from "../../src/providers/vercel/package.js";
 import { buildVercelPlan } from "../../src/providers/vercel/plan.js";
 
 describe("provider registry", () => {
-  it("exacts two provider IDs", () => {
-    expect(providerRegistry.ids()).toEqual(["railway", "vercel"]);
+  it("exacts provider IDs", () => {
+    expect(providerRegistry.ids()).toEqual(["railway", "vercel", "cloudflare", "neon"]);
   });
 
   it("rejects duplicate IDs in registry creation", async () => {

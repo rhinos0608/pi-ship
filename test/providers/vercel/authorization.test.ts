@@ -12,7 +12,7 @@ describe("V2 authorization", () => {
     const cwd = await mkdtemp(join(tmpdir(), "pi-ship-auth-v2-"));
     const manifest = { version: 2 as const, name: "site", app: { provider: "vercel" as const, config: { projectName: "site" } } };
     const plan = await buildVercelPlan(cwd, manifest, "production", "deploy", { accountRef: { kind: "user", id: "u" }, source: { kind: "local-files", rootDirectory: ".", fileCount: 0, totalBytes: 0, fingerprint: "src" }, gitCommit: "g", worktreeHash: "w", createdAt: new Date().toISOString() });
-    const registry = new ApprovalRegistry(cwd); registry.approve(plan.planId, plan.planDigest, cwd);
+    const registry = new ApprovalRegistry(cwd); registry.approve(plan.planId, plan.planDigest, cwd, { domain: "deployment", risk: "destructive" });
     await expect(authorizeVercelPlanApply({ cwd, plan, suppliedDigest: plan.planDigest, manifest, registry, state: defaultVercelState() })).rejects.toMatchObject({ code: "E_STATE_CONFLICT" });
     await expect(authorizeVercelPlanApply({ cwd, plan, suppliedDigest: plan.planDigest, manifest, registry, state: defaultVercelState(), currentSource: { gitCommit: "g", worktreeHash: "w", sourceFingerprint: "src" } })).resolves.toBeUndefined();
   });

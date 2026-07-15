@@ -48,7 +48,7 @@ async function makeApprovedPlan() {
       serviceNames: state.serviceNames,
     },
   });
-  registry.approve(plan.planId, plan.planDigest);
+  registry.approve(plan.planId, plan.planDigest, undefined, { domain: "deployment", risk: "destructive" });
   return plan;
 }
 
@@ -127,7 +127,7 @@ describe("applyPlan preflight", () => {
         serviceNames: state.serviceNames,
       },
     });
-    registry.approve(plan.planId, plan.planDigest);
+    registry.approve(plan.planId, plan.planDigest, undefined, { domain: "deployment", risk: "destructive" });
     await expect(applyRailwayPlan(baseCtx(plan))).rejects.toMatchObject({
       code: "E_PLAN_STALE",
     });

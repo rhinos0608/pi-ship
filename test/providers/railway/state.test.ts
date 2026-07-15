@@ -27,7 +27,7 @@ describe("loadRailwayState", () => {
       projectId: "proj-123",
       serviceIds: { app: "svc-1", postgres: "svc-2" },
       lastRelease: { id: "rel-1", digest: "abc", url: "https://x.railway.app", at: new Date().toISOString() },
-      history: [{ planId: "p1", digest: "abc", at: new Date().toISOString(), status: "ok" }],
+      history: [{ planId: "p1", digest: "abc", at: new Date().toISOString(), status: "ok" as const }],
     };
     await saveRailwayState(tmp, state);
     const loaded = await loadRailwayState(tmp);

@@ -17,7 +17,7 @@ describe("cloud-free acceptance lifecycle", () => {
       const state = defaultState();
       const plan = await buildRailwayPlan(cwd, manifest, "production", { planId: "accept-plan", targetSnapshot: { projectId: state.projectId, projectName: state.projectName, environmentId: state.environmentId, environmentName: state.environmentName, serviceIds: state.serviceIds, serviceNames: state.serviceNames } });
       const registry = new ApprovalRegistry(cwd);
-      registry.approve(plan.planId, plan.planDigest);
+      registry.approve(plan.planId, plan.planDigest, undefined, { domain: "deployment", risk: "destructive" });
       const provider = createFakeProvider();
       const exec = async () => ({ code: 0, stdout: "", stderr: "" });
       await expect(applyRailwayPlan({ adapter: provider, manifest, plan, cwd, envReader: () => ({}), piExec: exec as never, registry, suppliedDigest: plan.planDigest })).rejects.toMatchObject({ code: "E_PRECONDITION" });
