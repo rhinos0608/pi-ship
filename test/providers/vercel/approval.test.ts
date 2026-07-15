@@ -1,0 +1,6 @@
+import { describe, expect, it } from "vitest";
+import { ApprovalRegistry } from "../../../src/core/approval.js";
+import { renderVercelPlanSummary, requestVercelApproval } from "../../../src/providers/vercel/approval.js";
+import type { VercelPlan } from "../../../src/providers/vercel/plan.js";
+const plan = { planId:"p",planDigest:"d",provider:"vercel",domain:"app",version:2,manifest:{version:2,name:"x",app:{provider:"vercel",config:{projectName:"x"}}},environment:"production",intent:"rollback",identity:{account:{kind:"team",id:"a"},project:{name:"x",observedId:"pr"},environment:"production"},accountFingerprint:"af",projectFingerprint:"pf",targetFingerprint:"tf",gitCommit:"g",gitDirty:false,worktreeHash:"w",secretNames:["TOKEN"],operations:[],estimatedImpact:"rollback",createdAt:new Date().toISOString()} as VercelPlan;
+describe("V2 approval",()=>{it("summary contains identifiers but not values",()=>{const summary=renderVercelPlanSummary(plan);expect(summary).toContain("TOKEN");expect(summary).not.toContain("secret-value")});it("denies headless approval",async()=>{await expect(requestVercelApproval({hasUI:false,ui:{} as never,cwd:"/tmp"},plan,new ApprovalRegistry())).resolves.toEqual({approved:false})})});

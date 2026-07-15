@@ -4,25 +4,40 @@
   "description": "Pi extension for Railway deployment lifecycle",
   "type": "module",
   "main": "./src/index.ts",
-  "files": ["src", "README.md", "pi-ship.schema.json", "docs"],
-  "keywords": ["pi-package"],
-  "pi": { "extensions": ["./src/index.ts"] },
+  "files": [
+    "src",
+    "README.md",
+    "pi-ship.schema.json",
+    "docs"
+  ],
+  "keywords": [
+    "pi-package"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest --run",
     "test:watch": "vitest",
     "acceptance": "node scripts/acceptance.mjs"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@pgsql/parser": "1.5.0",
+    "pg": "8.22.0"
+  },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "typebox": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "0.77.0",
     "@earendil-works/pi-ai": "0.77.0",
+    "@earendil-works/pi-coding-agent": "0.77.0",
     "@earendil-works/pi-tui": "0.77.0",
     "@types/node": "^24.12.4",
+    "@types/pg": "8.20.0",
     "typebox": "1.1.38",
     "typescript": "~5.9.3",
     "vitest": "~3.2.4"

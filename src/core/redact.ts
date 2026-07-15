@@ -1,7 +1,10 @@
+import { environmentSource } from "./environment.js";
+
 export function redact(text: string, envNames: string[], secretValues: string[] = []): string {
   const secrets: string[] = secretValues.filter((value) => value.length > 0);
+  const source = environmentSource();
   for (const name of envNames) {
-    const value = process.env[name];
+    const value = source.get(name);
     if (value && value.length >= 6) {
       secrets.push(value);
     }

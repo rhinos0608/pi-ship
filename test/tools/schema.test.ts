@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Value } from "typebox/value";
-import { shipOpsSchema } from "../../src/tools/ship-ops.js";
-import { dbOpsSchema } from "../../src/tools/db-ops.js";
+import { shipSchema } from "../../src/tools/ship/schema.js";
+import { DBSchema } from "../../src/tools/db/schema.js";
 
 describe("tool schemas", () => {
   it("accepts each ship action and rejects extra fields", () => {
@@ -9,15 +9,20 @@ describe("tool schemas", () => {
       { action: "validate" }, { action: "plan", environment: "production" },
       { action: "apply_plan", planId: "p", planDigest: "d" },
       { action: "status" }, { action: "logs", lines: 10 }, { action: "plan", environment: "production", intent: "rollback", targetReleaseId: "r" },
-    ]) { expect(Value.Check(shipOpsSchema, value), JSON.stringify(value)).toBe(true); }
-    expect(Value.Check(shipOpsSchema, { action: "status", extra: true })).toBe(false);
+    ]) { expect(Value.Check(shipSchema, value), JSON.stringify(value)).toBe(true); }
+    expect(Value.Check(shipSchema, { action: "status", extra: true })).toBe(false);
   });
   it("accepts each db action and rejects unknown actions", () => {
     for (const value of [
-      { action: "inspect" }, { action: "provision", environment: "production" },
-      { action: "migration_status" }, { action: "plan_migration", environment: "development" },
+      { action: "inspect" }, { action: "migration_status" }, { action: "plan_migration" },
       { action: "apply_plan", planId: "p", planDigest: "d" },
-    ]) { expect(Value.Check(dbOpsSchema, value), JSON.stringify(value)).toBe(true); }
-    expect(Value.Check(dbOpsSchema, { action: "apply_migration" })).toBe(false);
+      { action: "browse", table: "items", limit: 1, offset: 0 },
+      { action: "browse", table: "items" },
+      { action: "query", sql: "select 1", limit: 1 },
+      { action: "query", sql: "select 1" },
+      { action: "plan", sql: "select 1" },
+    ]) { expect(Value.Check(DBSchema, value), JSON.stringify(value)).toBe(true); }
+    expect(Value.Check(DBSchema, { action: "provision" })).toBe(false);
+    expect(Value.Check(DBSchema, { action: "plan_migration", environment: "production" })).toBe(false);
   });
 });
