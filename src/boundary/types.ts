@@ -22,6 +22,16 @@ export interface BoundaryCapability {
   readonly expiresAt: string;
 }
 
+export interface SignedCapability extends BoundaryCapability {
+  readonly version: 1;
+  readonly keyId: string;
+  readonly issuer: string;
+  readonly audience: string;
+  readonly projectBinding: string;
+  readonly jti: string;
+  readonly signature: string;
+}
+
 export interface BoundaryConfig {
   readonly mode: SecurityMode;
 }
