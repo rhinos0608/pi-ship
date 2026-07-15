@@ -1,4 +1,4 @@
-import { isShipError } from "../../core/errors.js";
+import { err, isShipError } from "../../core/errors.js";
 import {
   verified,
   unverified,
@@ -9,13 +9,15 @@ import {
   type ReconciliationState,
   type UnverifiedReason,
 } from "../../deployment/contracts.js";
-import { readFile } from "node:fs/promises";
+import { redact } from "../../core/redact.js";
+import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import {
   buildCloudflareOperations,
   type CloudflareOperation,
 } from "./plan.js";
 import type { CloudflareClient } from "./client.js";
+import type { TailEvent } from "./types.js";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 export type CloudflareRuntime = OperationRuntime<
@@ -35,6 +37,8 @@ export interface CloudflarePlanInput {
   versionId?: string;
   targetVersionId?: string;
   source?: string;
+  mainModule?: string;
+  compatibilityDate?: string;
 }
 
 export interface CloudflareExecutionInput {
@@ -122,8 +126,10 @@ export interface CloudflareRuntimeOptions {
   client: CloudflareClient;
   accountId: string;
   cwd: string;
+  workerName?: string;
   mainModule?: string;
   compatibilityDate?: string;
+  compatibilityFlags?: string[];
 }
 
 export function createCloudflareRuntime(
@@ -136,11 +142,15 @@ export function createCloudflareRuntime(
     workerCwd: string,
     operation: CloudflareOperation & { source?: string },
   ): Promise<string> {
-    if (operation.source) {
-      const resolved = path.resolve(workerCwd, operation.source);
-      return await readFile(resolved, "utf-8");
+    if (!operation.source) {
+      return "// placeholder";
     }
-    return "// placeholder – real content uploaded via version";
+    const resolved = await realpath(path.resolve(workerCwd, operation.source));
+    const baseDir = await realpath(workerCwd);
+    if (!resolved.startsWith(baseDir)) {
+      throw err("E_PRECONDITION", "operation source path escapes workers directory");
+    }
+    return await readFile(resolved, "utf-8");
   }
 
   // ── Auth ──────────────────────────────────────────────────────────────────
@@ -196,6 +206,8 @@ export function createCloudflareRuntime(
         versionId: intent === "deploy" ? input.versionId : undefined,
         targetVersionId: intent === "rollback" ? input.targetVersionId : undefined,
         source: input.source,
+        mainModule: input.mainModule,
+        compatibilityDate: input.compatibilityDate,
       });
       return verified<readonly CloudflareOperation[]>(operations);
     } catch (e: unknown) {
@@ -253,10 +265,13 @@ export function createCloudflareRuntime(
 
     // Create worker via multipart PUT — mutation
     try {
-      const metadata = {
+      const metadata: Record<string, unknown> = {
         compatibility_date: compatibilityDate ?? "2024-01-01",
         main_module: mainModule ?? "main.js",
       };
+      if (options.compatibilityFlags && options.compatibilityFlags.length > 0) {
+        metadata.compatibility_flags = options.compatibilityFlags;
+      }
       const scriptContent = await readSourceFile(cwd, operation);
       const created = await client.uploadWorker(operation.workerName, metadata, scriptContent, signal);
       return {
@@ -276,10 +291,13 @@ export function createCloudflareRuntime(
     signal?: AbortSignal,
   ): Promise<OperationResult> {
     try {
-      const metadata = {
+      const metadata: Record<string, unknown> = {
         compatibility_date: compatibilityDate ?? "2024-01-01",
         main_module: mainModule ?? "main.js",
       };
+      if (options.compatibilityFlags && options.compatibilityFlags.length > 0) {
+        metadata.compatibility_flags = options.compatibilityFlags;
+      }
       const scriptContent = await readSourceFile(cwd, operation);
       const version = await client.uploadVersion(operation.workerName, metadata, scriptContent, signal);
       return {
@@ -329,22 +347,28 @@ export function createCloudflareRuntime(
     }
   }
 
+  async function resolveLatestVersion(workerName: string, signal?: AbortSignal): Promise<string> {
+    const versions = await client.listVersions(workerName, signal);
+    if (!versions || versions.length === 0) {
+      throw err("E_PRECONDITION", "no versions available for deployment");
+    }
+    return versions[0].id;
+  }
+
   async function executeDeploy(
     operation: CloudflareOperation & { kind: "deploy" },
     signal?: AbortSignal,
   ): Promise<OperationResult> {
     try {
-      // Pick latest version at execution time to avoid the "pending" versionId
-      // that results from upload_version result not propagating through the generic engine.
-      // Cloudflare API returns versions newest-first.
-      const versions = await client.listVersions(operation.workerName, signal);
-      if (!versions || versions.length === 0) {
-        return providerFailed("E_PRECONDITION", "no versions available for deployment");
-      }
-      const latestVersionId = versions[0].id;
+      // versionId is propagated from the upload_version step via
+      // Cloudflare buildHooks closure capture (engine.ts).
+      // Fallback to listVersions only when propagation failed or race occurred.
+      const versionId = operation.versionId !== "pending"
+        ? operation.versionId
+        : await resolveLatestVersion(operation.workerName, signal);
       const deployment = await client.createDeployment(
         operation.workerName,
-        [{ version_id: latestVersionId, percentage: 100 }],
+        [{ version_id: versionId, percentage: 100 }],
         undefined,
         signal,
       );
@@ -355,7 +379,7 @@ export function createCloudflareRuntime(
         status: "succeeded",
         observedStateFingerprint: operation.expectedStateFingerprint,
         resourceRef: deployment.id,
-        providerRequestId: deployment.id,
+        providerRequestId: versionId,
       };
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -469,19 +493,173 @@ export function createCloudflareRuntime(
   }
 
   // ── Status ────────────────────────────────────────────────────────────────
-  async function doStatus(_releaseId: string, _signal?: AbortSignal): Promise<Verification<string>> {
-    // Cloudflare deployments are immutable and don't have build states like Vercel
-    return verified<string>("deployed");
+  async function doStatus(releaseId: string, signal?: AbortSignal): Promise<Verification<string>> {
+    if (!options.workerName) {
+      throw err("E_CONFIG_INVALID", "workerName is required for status check");
+    }
+    const name = options.workerName;
+    try {
+      const deployment = await client.getDeployment(name, releaseId, signal);
+      if (deployment && deployment.id === releaseId) {
+        return verified<string>("deployed");
+      }
+    } catch {
+      // deployment not found or error
+    }
+    return unverified("missing_payload", `deployment ${releaseId} not found`);
   }
 
   // ── Logs ──────────────────────────────────────────────────────────────────
   async function doLogs(
-    _releaseId: string,
-    _input: { lines: number; secretValues: readonly string[] },
-    _signal?: AbortSignal,
+    releaseId: string,
+    input: { lines: number; secretValues: readonly string[] },
+    signal?: AbortSignal,
   ): Promise<Verification<string>> {
-    // Logs not implemented in MVP (deferred)
-    return verified<string>("Logs not available for Cloudflare Workers in this version.");
+    try {
+      if (!options.workerName) {
+        throw err("E_CONFIG_INVALID", "workerName is required for log streaming");
+      }
+      const scriptName = options.workerName;
+
+      // Check WebSocket availability
+      if (typeof globalThis.WebSocket !== "function") {
+        return verified<string>(
+          "Live worker tail: WebSocket API not available in this runtime environment. " +
+          "Cloudflare Workers log streaming requires Node.js >=22 or the 'ws' package.",
+        );
+      }
+
+      // Create tail session
+      const tail = await client.createTail(scriptName, signal);
+
+      let tailDeleted = false;
+      async function cleanupTail() {
+        if (tailDeleted) return;
+        tailDeleted = true;
+        try {
+          await client.deleteTail(scriptName, tail.id);
+        } catch {
+          // Best-effort cleanup; session will expire naturally
+        }
+      }
+
+      try {
+        const ws = new WebSocket(tail.url);
+
+        const collected: TailEvent[] = [];
+        const maxLines = Math.max(1, Math.min(Math.floor(input.lines), 500));
+
+        await new Promise<void>((resolve) => {
+          const sessionTimeout = setTimeout(() => {
+            ws.close();
+            resolve();
+          }, 15_000);
+
+          let idleTimer: ReturnType<typeof setTimeout> | null = null;
+          function resetIdleTimer() {
+            if (idleTimer) clearTimeout(idleTimer);
+            idleTimer = setTimeout(() => {
+              ws.close();
+              resolve();
+            }, 10_000);
+          }
+
+          ws.onopen = () => {
+            resetIdleTimer();
+          };
+
+          ws.onmessage = (event: MessageEvent) => {
+            resetIdleTimer();
+            try {
+              const data = JSON.parse(event.data as string);
+              const events: TailEvent[] = Array.isArray(data) ? data : [data];
+              for (const evt of events) {
+                if (evt && typeof evt === "object") {
+                  collected.push(evt);
+                  if (collected.length >= maxLines) {
+                    ws.close();
+                    resolve();
+                    return;
+                  }
+                }
+              }
+            } catch {
+              // Skip malformed messages
+            }
+          };
+
+          ws.onerror = () => {
+            // onclose fires after onerror
+          };
+
+          ws.onclose = () => {
+            clearTimeout(sessionTimeout);
+            if (idleTimer) clearTimeout(idleTimer);
+            resolve();
+          };
+
+          if (signal) {
+            if (signal.aborted) {
+              ws.close();
+              resolve();
+              return;
+            }
+            signal.addEventListener("abort", () => {
+              ws.close();
+              resolve();
+            }, { once: true });
+          }
+        });
+
+        if (collected.length === 0) {
+          return verified<string>(
+            "[live worker tail] No log messages received. " +
+            "Note: Cloudflare Tail API samples messages under high traffic — some log entries may be dropped.",
+          );
+        }
+
+        // Format collected events
+        const lines: string[] = [];
+        for (const evt of collected) {
+          const ts = evt.eventTimestamp
+            ? new Date(evt.eventTimestamp).toISOString()
+            : new Date().toISOString();
+          const outcome = evt.outcome ?? "unknown";
+          lines.push(`[${ts}] [${outcome}] ${evt.scriptName ?? scriptName}`);
+          if (evt.logs) {
+            for (const log of evt.logs) {
+              const level = log.level ?? "log";
+              const rawMsg = log.message;
+              const msg = Array.isArray(rawMsg)
+                ? rawMsg.map((m) => (typeof m === "string" ? m : JSON.stringify(m))).join(" ")
+                : String(rawMsg ?? "");
+              lines.push(`  [${level}] ${msg}`);
+            }
+          }
+          if (evt.exceptions) {
+            for (const ex of evt.exceptions) {
+              lines.push(`  [exception] ${ex.name ?? "Error"}: ${ex.message ?? ""}`);
+            }
+          }
+        }
+
+        const text = lines.join("\n");
+        const sensitiveValues = [...input.secretValues];
+        const redacted = redact(text, [], sensitiveValues);
+        const capped = redacted.length > 50000
+          ? redacted.slice(0, 50000) + "\n...truncated"
+          : redacted;
+
+        return verified<string>(capped);
+      } finally {
+        await cleanupTail();
+      }
+    } catch (e: unknown) {
+      if (isShipError(e)) {
+        return verificationError<string>(e, "Cloudflare logs verification failed");
+      }
+      return unverified<string>("transport", "Cloudflare logs verification failed: " + (e instanceof Error ? e.message : String(e)), true);
+    }
   }
 
   // ── Assemble runtime ──────────────────────────────────────────────────────
@@ -495,6 +673,7 @@ export function createCloudflareRuntime(
         "deploy",
         "status",
         "rollback",
+        "logs",
       ] as const,
     },
     checkAuth: doCheckAuth,

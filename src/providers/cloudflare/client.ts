@@ -1,6 +1,6 @@
 import { err } from "../../core/errors.js";
 import { redact } from "../../core/redact.js";
-import type { CloudflareClientConfig, CloudflareResponse, Script, Version, Deployment, Secret } from "./types.js";
+import type { CloudflareClientConfig, CloudflareResponse, TailCreateResponse, Script, Version, Deployment, Secret } from "./types.js";
 
 // ── Default base URL ───────────────────────────────────────────────────────
 const DEFAULT_BASE_URL = "https://api.cloudflare.com/client/v4";
@@ -27,6 +27,11 @@ export interface CloudflareClient {
   putSecret(name: string, secretName: string, value: string, signal?: AbortSignal): Promise<void>;
   deleteSecret(name: string, secretName: string, signal?: AbortSignal): Promise<void>;
   bulkSecrets(name: string, operations: Array<{ name: string; type: "secret_text"; value: string }>, signal?: AbortSignal): Promise<void>;
+
+  // ── Tail API (Workers Tail) ──────────────────────────────────────────
+  createTail(scriptName: string, signal?: AbortSignal): Promise<TailCreateResponse>;
+  deleteTail(scriptName: string, tailId: string, signal?: AbortSignal): Promise<void>;
+  listTails(scriptName: string, signal?: AbortSignal): Promise<Array<{ id: string; expires_at: string; url: string }>>;
 }
 
 // ── Factory ─────────────────────────────────────────────────────────────────
@@ -96,12 +101,20 @@ export function createCloudflareClient(
     if (options.contentType) {
       reqHeaders["Content-Type"] = options.contentType;
     }
-    const response = await fetchImpl(url, {
-      method,
-      headers: reqHeaders,
-      body: options.body,
-      signal: options.signal,
-    });
+    let response: Response;
+    try {
+      response = await fetchImpl(url, {
+        method,
+        headers: reqHeaders,
+        body: options.body,
+        signal: options.signal,
+      });
+    } catch (cause: unknown) {
+      if (cause instanceof TypeError) {
+        throw err("E_PROVIDER", safeMsg(`${method} ${path}: transport error`), true);
+      }
+      throw cause;
+    }
     if (response.status === 204) return undefined as T;
     return parseCloudflareResponse<T>(response, `${method} ${path}`, options.secrets ?? []);
   }
@@ -240,6 +253,18 @@ export function createCloudflareClient(
         body: JSON.stringify(body),
         secrets: operations.map((op) => op.value),
       });
+    },
+
+    async createTail(scriptName, signal) {
+      return request<TailCreateResponse>("POST", `/accounts/${encodePath(config.accountId)}/workers/scripts/${encodePath(scriptName)}/tails`, { signal });
+    },
+
+    async deleteTail(scriptName, tailId, signal) {
+      await request<unknown>("DELETE", `/accounts/${encodePath(config.accountId)}/workers/scripts/${encodePath(scriptName)}/tails/${encodePath(tailId)}`, { signal });
+    },
+
+    async listTails(scriptName, signal) {
+      return request<Array<{ id: string; expires_at: string; url: string }>>("GET", `/accounts/${encodePath(config.accountId)}/workers/scripts/${encodePath(scriptName)}/tails`, { signal });
     },
   };
 }

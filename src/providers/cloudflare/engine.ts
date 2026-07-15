@@ -82,6 +82,7 @@ export async function applyCloudflarePlan(ctx: ApplyCloudflarePlanContext): Prom
 
 // ── Hooks builder ───────────────────────────────────────────────────────────
 function buildHooks(ctx: ApplyCloudflarePlanContext, runtime: CloudflareRuntime, secretValues: Readonly<Record<string, string>>): OperationRunHooks<CloudflareOperation, CloudflareState> {
+  let capturedVersionId: string | undefined;
   return {
     signal: ctx.signal,
 
@@ -143,7 +144,17 @@ function buildHooks(ctx: ApplyCloudflarePlanContext, runtime: CloudflareRuntime,
 
     execute: async (operation) => {
       try {
-        const result = await runtime.execute(operation, { secretValues }, ctx.signal);
+        // If a prior upload_version produced a concrete versionId and this
+        // deploy still carries "pending", use the captured version to avoid
+        // a blind latest-version fetch at execution time.
+        const effectiveOp = (operation.kind === "deploy" && operation.versionId === "pending" && capturedVersionId)
+          ? { ...operation, versionId: capturedVersionId }
+          : operation;
+        const result = await runtime.execute(effectiveOp, { secretValues }, ctx.signal);
+        // Capture upload_version's concrete versionId for dependent deploy ops.
+        if (operation.kind === "upload_version" && result.status === "succeeded" && result.providerRequestId) {
+          capturedVersionId = result.providerRequestId;
+        }
         return result;
       } catch (cause: unknown) {
         if (ctx.signal?.aborted || (cause instanceof Error && cause.name === "AbortError")) {
@@ -159,7 +170,7 @@ function buildHooks(ctx: ApplyCloudflarePlanContext, runtime: CloudflareRuntime,
     },
 
     applyVerifiedState: (state, operation, result) => {
-      return applyVerifiedCloudflareState(state, ctx.plan, operation, result.resourceRef);
+      return applyVerifiedCloudflareState(state, ctx.plan, operation, result.resourceRef, result.providerRequestId);
     },
 
     requireResource: (operation, resourceRef) => {
@@ -222,6 +233,7 @@ export function applyVerifiedCloudflareState(
   plan: CloudflarePlan,
   operation: CloudflareOperation,
   resourceRef?: string,
+  providerRequestId?: string,
 ): CloudflareState {
   if (
     (operation.kind === "ensure_worker" || operation.kind === "deploy" || operation.kind === "rollback") &&
@@ -248,7 +260,7 @@ export function applyVerifiedCloudflareState(
       next.deployments.push({
         id: resourceRef!,
         versionId: operation.kind === "deploy"
-          ? (operation as CloudflareOperation & { kind: "deploy" }).versionId
+          ? (providerRequestId ?? (operation as CloudflareOperation & { kind: "deploy" }).versionId)
           : (operation as CloudflareOperation & { kind: "rollback" }).targetVersionId,
         planId: plan.planId,
         digest: plan.planDigest,

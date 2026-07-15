@@ -19,6 +19,9 @@ function createExecution(manifest: unknown, options: ProviderExecutionOptions): 
     throw err("E_STATE_CONFLICT", "Cloudflare factory requires Cloudflare state");
   }
   const credentials = loadCloudflareCredentials(options.credentialSource);
+  if (manifest.accountId !== credentials.accountId) {
+    throw err("E_CONFIG_INVALID", `manifest account "${manifest.accountId}" does not match credentials account "${credentials.accountId}"`);
+  }
   const client = createCloudflareClient({
     apiToken: credentials.apiToken,
     accountId: credentials.accountId,
@@ -27,8 +30,10 @@ function createExecution(manifest: unknown, options: ProviderExecutionOptions): 
     client,
     accountId: credentials.accountId,
     cwd: options.cwd ?? "",
+    workerName: manifest.name,
     mainModule: manifest.mainModule,
     compatibilityDate: manifest.compatibilityDate,
+    compatibilityFlags: manifest.compatibilityFlags,
   });
   return { contract: 1, provider: "cloudflare", runtime, client };
 }

@@ -39,6 +39,7 @@ export const CloudflarePlanSchema = Type.Object({
   }, Strict),
   accountFingerprint: NonEmpty,
   targetFingerprint: NonEmpty,
+  manifestFingerprint: NonEmpty,
   secretNames: Type.Array(NonEmpty),
   operations: Type.Array(CloudflareOperationSchema),
   createdAt: NonEmpty,
@@ -88,6 +89,8 @@ export interface CloudflareBuildOptions {
   versionId?: string;
   targetVersionId?: string;
   source?: string;
+  mainModule?: string;
+  compatibilityDate?: string;
 }
 
 export function buildCloudflareOperations(
@@ -149,6 +152,8 @@ export function buildCloudflareOperations(
     workerName: options.workerName,
     accountId: options.accountId,
     ...(options.source ? { source: options.source } : {}),
+    ...(options.mainModule ? { mainModule: options.mainModule } : {}),
+    ...(options.compatibilityDate ? { compatibilityDate: options.compatibilityDate } : {}),
   }, [ensureWorker.operationId]);
   const setSecrets = make("set_secrets", { workerName: options.workerName, secretNames: options.secretNames ?? [] }, [uploadVersion.operationId]);
   const deploy = make("deploy", { workerName: options.workerName, versionId: options.versionId ?? "pending" }, [setSecrets.operationId]);

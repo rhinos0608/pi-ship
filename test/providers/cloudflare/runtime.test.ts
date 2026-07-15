@@ -366,14 +366,14 @@ describe("CloudflareRuntime", () => {
       it("succeeds using latest version", async () => {
         const fake = createFakeCloudflareClient();
         const { rt } = createRuntime(fake);
-        // Seed a version
-        await fake.uploadVersion("my-worker", {}, "export default {}");
+        // Seed a version and capture its actual ID
+        const version = await fake.uploadVersion("my-worker", {}, "export default {}");
         const op: CloudflareOperation = {
           operationId: "op8",
           provider: "cloudflare",
           kind: "deploy",
           workerName: "my-worker",
-          versionId: "v-1",
+          versionId: version.id,
           targetFingerprint: "tf1",
           requestFingerprint: "rf1",
           expectedStateFingerprint: "esf1",
@@ -387,7 +387,29 @@ describe("CloudflareRuntime", () => {
         }
       });
 
-      it("fails when no versions available", async () => {
+      it("falls back to listVersions when versionId is pending", async () => {
+        const fake = createFakeCloudflareClient();
+        const version = await fake.uploadVersion("my-worker", {}, "export default {}");
+        const rt = createCloudflareRuntime({ client: fake, accountId: "test-account-id", cwd: "/tmp/test-cwd", workerName: "my-worker" });
+        const op: CloudflareOperation = {
+          operationId: "op-pending",
+          provider: "cloudflare",
+          kind: "deploy",
+          workerName: "my-worker",
+          versionId: "pending",
+          targetFingerprint: "tf1",
+          requestFingerprint: "rf1",
+          expectedStateFingerprint: "esf1",
+          dependsOn: [],
+        };
+        const result = await rt.execute(op, { secretValues: {} });
+        expect(result.status).toBe("succeeded");
+        if (result.status === "succeeded") {
+          expect(result.providerRequestId).toBe(version.id);
+        }
+      });
+
+      it("fails when version not found", async () => {
         const { rt } = createRuntime();
         const op: CloudflareOperation = {
           operationId: "op9",
@@ -403,7 +425,7 @@ describe("CloudflareRuntime", () => {
         const result = await rt.execute(op, { secretValues: {} });
         expect(result.status).toBe("failed");
         if (result.status === "failed") {
-          expect(result.code).toBe("E_PRECONDITION");
+          expect(result.code).toBe("E_PROVIDER");
         }
       });
     });
@@ -723,9 +745,13 @@ describe("CloudflareRuntime", () => {
   });
 
   describe("status", () => {
-    it("returns deployed", async () => {
-      const { rt } = createRuntime();
-      const result = await rt.status("any-release-id");
+    it("returns deployed when deployment exists", async () => {
+      const fake = createFakeCloudflareClient();
+      // Seed a version and deployment so getDeployment succeeds
+      const version = await fake.uploadVersion("my-worker", {}, "export default {}");
+      const deployment = await fake.createDeployment("my-worker", [{ version_id: version.id, percentage: 100 }]);
+      const rt = createCloudflareRuntime({ client: fake, accountId: "test-account-id", cwd: "/tmp/test-cwd", workerName: "my-worker" });
+      const result = await rt.status(deployment.id);
       expect(result.status).toBe("verified");
       if (result.status === "verified") {
         expect(result.value).toBe("deployed");
@@ -734,12 +760,137 @@ describe("CloudflareRuntime", () => {
   });
 
   describe("logs", () => {
-    it("returns not-available message", async () => {
-      const { rt } = createRuntime();
-      const result = await rt.logs("any-id", { lines: 50, secretValues: [] });
+    // Track mock WebSocket instances for test access
+    const mockSockets: Array<{
+      url: string;
+      onopen: ((event: unknown) => void) | null;
+      onmessage: ((event: { data: string }) => void) | null;
+      onerror: ((event: unknown) => void) | null;
+      onclose: ((event: unknown) => void) | null;
+      close(): void;
+      _open(): void;
+      _message(data: string): void;
+      _error(): void;
+    }> = [];
+
+    class MockWebSocket {
+      url: string;
+      onopen: ((event: unknown) => void) | null = null;
+      onmessage: ((event: { data: string }) => void) | null = null;
+      onerror: ((event: unknown) => void) | null = null;
+      onclose: ((event: unknown) => void) | null = null;
+
+      constructor(url: string) {
+        this.url = url;
+        mockSockets.push(this);
+      }
+
+      close() {
+        // Defer close to let the current execution block finish
+        queueMicrotask(() => {
+          if (this.onclose) this.onclose({});
+        });
+      }
+
+      _open() { if (this.onopen) this.onopen({}); }
+      _message(data: string) { if (this.onmessage) this.onmessage({ data }); }
+      _error() { if (this.onerror) this.onerror({}); }
+    }
+
+    let originalWebSocket: typeof globalThis.WebSocket;
+
+    beforeEach(() => {
+      originalWebSocket = globalThis.WebSocket;
+      globalThis.WebSocket = MockWebSocket as unknown as typeof globalThis.WebSocket;
+      mockSockets.length = 0;
+    });
+
+    afterEach(() => {
+      globalThis.WebSocket = originalWebSocket;
+    });
+
+    function createRuntimeWithWorkerName(workerName: string) {
+      const fake = createFakeCloudflareClient();
+      const rt = createCloudflareRuntime({ client: fake, accountId: "test-account-id", cwd: "/tmp/test-cwd", workerName });
+      return { rt, fake };
+    }
+
+    it("returns live worker tail with events", async () => {
+      const { rt } = createRuntimeWithWorkerName("my-worker");
+      const logsPromise = rt.logs("rel-1", { lines: 10, secretValues: [] });
+
+      // Yield to let doLogs create the WebSocket
+      await Promise.resolve();
+
+      const ws = mockSockets[0];
+      expect(ws).toBeDefined();
+      ws._open();
+      ws._message(JSON.stringify([{
+        outcome: "ok",
+        scriptName: "my-worker",
+        eventTimestamp: Date.now(),
+        logs: [{ message: "hello world", level: "log", timestamp: Date.now() }],
+        exceptions: [],
+        event: {},
+      }]));
+      // Close triggers cleanup via onclose
+      ws.close();
+
+      const result = await logsPromise;
       expect(result.status).toBe("verified");
       if (result.status === "verified") {
-        expect(result.value).toContain("not available");
+        expect(result.value).toContain("hello world");
+        expect(result.value).toContain("[log]");
+      }
+    });
+
+    it("tail cleanup on abort", async () => {
+      const { rt, fake } = createRuntimeWithWorkerName("abort-worker");
+      const ac = new AbortController();
+      const logsPromise = rt.logs("rel-2", { lines: 10, secretValues: [] }, ac.signal);
+
+      await Promise.resolve();
+
+      const ws = mockSockets[0];
+      expect(ws).toBeDefined();
+      ws._open();
+      // Abort triggers abort handler -> ws.close() -> onclose -> resolve
+      ac.abort();
+
+      const result = await logsPromise;
+      expect(result.status).toBe("verified");
+      // Tail should be deleted even on abort
+      expect(fake.calls.some((c) => c.method === "deleteTail")).toBe(true);
+    });
+
+    it("tail cleanup on error", async () => {
+      const fake = createFakeCloudflareClient({
+        failures: { createTail: () => new Error("tail creation failed") },
+      });
+      const rt = createCloudflareRuntime({ client: fake, accountId: "test-account-id", cwd: "/tmp/test-cwd", workerName: "err-worker" });
+
+      const result = await rt.logs("rel-3", { lines: 10, secretValues: [] });
+      expect(result.status).toBe("unverified");
+      if (result.status === "unverified") {
+        expect(result.reason).toBe("transport");
+      }
+    });
+
+    it("empty logs when no messages received", async () => {
+      const { rt } = createRuntimeWithWorkerName("silent-worker");
+      const logsPromise = rt.logs("rel-4", { lines: 10, secretValues: [] });
+
+      await Promise.resolve();
+
+      const ws = mockSockets[0];
+      expect(ws).toBeDefined();
+      ws._open();
+      ws.close();
+
+      const result = await logsPromise;
+      expect(result.status).toBe("verified");
+      if (result.status === "verified") {
+        expect(result.value).toContain("No log messages");
       }
     });
   });

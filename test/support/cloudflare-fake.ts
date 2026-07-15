@@ -1,5 +1,5 @@
 import type { CloudflareClient } from "../../src/providers/cloudflare/client.js";
-import type { Script, Version, Deployment, Secret } from "../../src/providers/cloudflare/types.js";
+import type { Script, Version, Deployment, Secret, TailCreateResponse } from "../../src/providers/cloudflare/types.js";
 
 export interface FakeCall {
   method: string;
@@ -37,6 +37,7 @@ export function createFakeCloudflareClient(config?: {
   const failures: Partial<Record<keyof CloudflareClient, ErrorFactory>> = { ...config?.failures };
   const calls: FakeCall[] = [];
   const uploadedContent = new Map<string, string>();
+  const tails = new Map<string, Array<{ id: string; expires_at: string; url: string }>>();
 
   function maybeFail(method: keyof CloudflareClient): void {
     const factory = failures[method];
@@ -212,6 +213,34 @@ export function createFakeCloudflareClient(config?: {
         }
       }
       secrets.set(name, existing);
+    },
+
+    async createTail(scriptName, signal) {
+      record("createTail", [scriptName]);
+      maybeFail("createTail");
+      const id = uid("tail");
+      const tail = {
+        id,
+        expires_at: new Date(Date.now() + 60_000).toISOString(),
+        url: `ws://fake-tail.cloudflare.test/${id}`,
+      };
+      const existing = tails.get(scriptName) ?? [];
+      existing.push(tail);
+      tails.set(scriptName, existing);
+      return tail;
+    },
+
+    async deleteTail(scriptName, tailId, signal) {
+      record("deleteTail", [scriptName, tailId]);
+      maybeFail("deleteTail");
+      const existing = tails.get(scriptName) ?? [];
+      tails.set(scriptName, existing.filter((t) => t.id !== tailId));
+    },
+
+    async listTails(scriptName, signal) {
+      record("listTails", [scriptName]);
+      maybeFail("listTails");
+      return tails.get(scriptName) ?? [];
     },
   };
 }

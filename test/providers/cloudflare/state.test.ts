@@ -1,7 +1,7 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   defaultCloudflareState,
@@ -172,5 +172,43 @@ describe("saveCloudflareState", () => {
     const parsed = JSON.parse(content);
     expect(parsed.deployments).toHaveLength(1);
     expect(parsed.deployments[0].id).toBe("d1");
+  });
+
+  it("failed atomic write preserves previous valid state", async () => {
+    const original = {
+      provider: "cloudflare" as const,
+      version: 1 as const,
+      deployments: [{ id: "orig-d", versionId: "v1", planId: "p1", digest: "abc", at: new Date().toISOString() }],
+      history: [],
+    };
+    await saveCloudflareState(tmp, original);
+
+    // Read back to confirm original was saved
+    const beforeContent = await readFile(statePath(tmp), "utf8");
+    const before = JSON.parse(beforeContent);
+    expect(before.deployments[0].id).toBe("orig-d");
+
+    // Make statePath's parent dir non-writable so the next atomic write fails
+    const { chmod } = await import("node:fs/promises");
+    const stateDir = dirname(statePath(tmp));
+    await chmod(stateDir, 0o444);
+    try {
+      // saveCloudflareState should throw because temp file write fails
+      const badState = {
+        provider: "cloudflare" as const,
+        version: 1 as const,
+        deployments: [{ id: "should-not-persist", versionId: "v2", planId: "p2", digest: "xyz", at: new Date().toISOString() }],
+        history: [],
+      };
+      await expect(saveCloudflareState(tmp, badState)).rejects.toThrow();
+    } finally {
+      // Always restore permissions so cleanup can proceed
+      await chmod(stateDir, 0o755);
+    }
+
+    // Verify original state is intact
+    const survived = JSON.parse(await readFile(statePath(tmp), "utf8"));
+    expect(survived.deployments).toHaveLength(1);
+    expect(survived.deployments[0].id).toBe("orig-d");
   });
 });

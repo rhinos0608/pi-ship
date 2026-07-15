@@ -81,10 +81,18 @@ async function planAction(
     versionId: undefined,
     targetVersionId: isRollback ? params.targetReleaseId : undefined,
     source: manifest.source,
+    mainModule: manifest.mainModule,
+    compatibilityDate: manifest.compatibilityDate,
   });
 
   const accountFingerprint = computeCloudflareFingerprint({ kind: "user", id: manifest.accountId });
-  const targetFingerprint = computeCloudflareFingerprint({ workerName: manifest.name, accountId: manifest.accountId });
+  const targetFingerprint = computeCloudflareFingerprint({ worker: manifest.name, accountId: manifest.accountId });
+  const manifestFingerprint = computeCloudflareFingerprint({
+    mainModule: manifest.mainModule,
+    compatibilityDate: manifest.compatibilityDate,
+    compatibilityFlags: manifest.compatibilityFlags,
+    source: manifest.source,
+  });
   const plan: CloudflarePlan = {
     version: 1,
     planId: `cf-${Date.now()}-${randomUUID().slice(0, 8)}`,
@@ -98,6 +106,7 @@ async function planAction(
     },
     accountFingerprint,
     targetFingerprint,
+    manifestFingerprint,
     secretNames: manifest.secrets ?? [],
     operations,
     createdAt: new Date().toISOString(),
@@ -221,9 +230,8 @@ async function logsAction(
     return { content: [{ type: "text", text: "No deployment found." }], details: {} };
   }
   const { runtime } = createExecution(pi, cwd, manifest, state, credentialSource, services);
-  const secretNames = manifest.secrets ?? [];
-  const appSecretValues = loadAppSecrets(credentialSource, secretNames);
-  const logResult = await runtime.logs(lastDeployment.id, { lines: 100, secretValues: Object.values(appSecretValues) }, signal);
+  const secretValues = Object.values(loadAppSecrets(credentialSource, manifest.secrets ?? []));
+  const logResult = await runtime.logs(lastDeployment.id, { lines: 100, secretValues }, signal);
   if (logResult.status === "unverified") {
     return {
       content: [{ type: "text", text: `Logs unavailable: ${logResult.safeMessage}` }],

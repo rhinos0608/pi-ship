@@ -46,6 +46,15 @@ export async function authorizeCloudflarePlanApply(ctx: CloudflareAuthorizationC
   if (m?.accountId !== ctx.plan.identity.account.id || m?.name !== ctx.plan.identity.worker.name) {
     throw err("E_STATE_CONFLICT", "current manifest differs from approved plan");
   }
+  const recomputedManifestFingerprint = computeCloudflareFingerprint({
+    mainModule: (m as Record<string, unknown>)?.mainModule,
+    compatibilityDate: (m as Record<string, unknown>)?.compatibilityDate,
+    compatibilityFlags: (m as Record<string, unknown>)?.compatibilityFlags,
+    source: (m as Record<string, unknown>)?.source,
+  });
+  if (recomputedManifestFingerprint !== ctx.plan.manifestFingerprint) {
+    throw err("E_STATE_CONFLICT", "manifest settings do not match approved plan fingerprint");
+  }
   validateTargetBinding(ctx.plan, ctx.state);
   validateOperations(ctx.plan);
 
@@ -70,6 +79,19 @@ function validateOperations(plan: CloudflarePlan): void {
 
   if (plan.operations.length !== expectedKinds.length) {
     throw err("E_STATE_CONFLICT", "plan has an invalid operation sequence");
+  }
+
+  // Recompute and verify identity fingerprints
+  const expectedAccountFingerprint = computeCloudflareFingerprint(plan.identity.account);
+  if (expectedAccountFingerprint !== plan.accountFingerprint) {
+    throw err("E_STATE_CONFLICT", "plan accountFingerprint does not match identity");
+  }
+  const expectedTargetFingerprint = computeCloudflareFingerprint({
+    worker: plan.identity.worker.name,
+    accountId: plan.identity.account.id,
+  });
+  if (expectedTargetFingerprint !== plan.targetFingerprint) {
+    throw err("E_STATE_CONFLICT", "plan targetFingerprint does not match identity");
   }
 
   const priorIds = new Set<string>();
@@ -98,6 +120,11 @@ function validateOperations(plan: CloudflarePlan): void {
     }
     if (operation.provider !== plan.provider || operation.targetFingerprint !== plan.targetFingerprint) {
       throw err("E_STATE_CONFLICT", "operation target does not match plan");
+    }
+    // Verify every operation targets the approved worker
+    const op = operation as Record<string, unknown>;
+    if (op.workerName !== plan.identity.worker.name) {
+      throw err("E_STATE_CONFLICT", `operation ${operation.operationId} workerName does not match approved plan identity`);
     }
     priorIds.add(operation.operationId);
   }

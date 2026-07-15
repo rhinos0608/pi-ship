@@ -323,6 +323,53 @@ describe("CloudflareClient", () => {
     });
   });
 
+  describe("createTail", () => {
+    it("POST /accounts/{id}/workers/scripts/{name}/tails", async () => {
+      const calls: CallRecord[] = [];
+      const tailResult = { id: "tail-1", expires_at: "2024-12-31T23:59:59Z", url: "wss://tail.cloudflare.com/v1/tail-1" };
+      const client = createCloudflareClient(
+        basicConfig(),
+        recordingFetch(calls, fakeCloudflareSuccess(tailResult))
+      );
+      const result = await client.createTail("my-worker");
+      expect(result.id).toBe("tail-1");
+      expect(result.url).toContain("wss://");
+      expect(calls[0].method).toBe("POST");
+      expect(calls[0].url).toContain("/accounts/acc_123/workers/scripts/my-worker/tails");
+    });
+  });
+
+  describe("deleteTail", () => {
+    it("DELETE /accounts/{id}/workers/scripts/{name}/tails/{id}", async () => {
+      const calls: CallRecord[] = [];
+      const client = createCloudflareClient(
+        basicConfig(),
+        recordingFetch(calls, new Response(JSON.stringify({ success: true, errors: [], result: null }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }))
+      );
+      await client.deleteTail("my-worker", "tail-1");
+      expect(calls[0].method).toBe("DELETE");
+      expect(calls[0].url).toContain("/accounts/acc_123/workers/scripts/my-worker/tails/tail-1");
+    });
+  });
+
+  describe("listTails", () => {
+    it("GET /accounts/{id}/workers/scripts/{name}/tails", async () => {
+      const calls: CallRecord[] = [];
+      const tails = [{ id: "tail-1", expires_at: "2024-12-31T23:59:59Z", url: "wss://tail.cloudflare.com/v1/tail-1" }];
+      const client = createCloudflareClient(
+        basicConfig(),
+        recordingFetch(calls, fakeCloudflareSuccess(tails))
+      );
+      const result = await client.listTails("my-worker");
+      expect(result).toHaveLength(1);
+      expect(calls[0].method).toBe("GET");
+      expect(calls[0].url).toContain("/accounts/acc_123/workers/scripts/my-worker/tails");
+    });
+  });
+
   describe("custom baseUrl", () => {
     it("uses custom base URL", async () => {
       const calls: CallRecord[] = [];

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it, beforeEach } from "vitest";
 import {
   buildCloudflareOperations,
+  computeCloudflareFingerprint,
   computeCloudflarePlanDigest,
   type CloudflarePlan,
 } from "../../../src/providers/cloudflare/plan.js";
@@ -38,14 +39,21 @@ function makePlan(overrides: Partial<CloudflarePlan> = {}): CloudflarePlan {
       account: { kind: "user", id: "acc-123" },
       worker: { name: "my-worker" },
     },
-    accountFingerprint: computeCloudflarePlanDigest({ account: { kind: "user", id: "acc-123" } }),
-    targetFingerprint: computeCloudflarePlanDigest({ worker: "my-worker", accountId: "acc-123" }),
+    accountFingerprint: computeCloudflareFingerprint({ kind: "user", id: "acc-123" }),
+    targetFingerprint: computeCloudflareFingerprint({ worker: "my-worker", accountId: "acc-123" }),
+    manifestFingerprint: computeCloudflareFingerprint({
+      mainModule: "src/index.ts",
+      compatibilityDate: "2024-01-01",
+    }),
     secretNames: ["API_KEY"],
     operations: ops,
     createdAt: now,
     ...overrides,
   };
-  plan.planDigest = computeCloudflarePlanDigest(plan);
+  // Only compute digest if not supplied via overrides
+  if (!plan.planDigest) {
+    plan.planDigest = computeCloudflarePlanDigest(plan);
+  }
   return plan;
 }
 

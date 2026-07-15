@@ -90,3 +90,31 @@ export const SecretSchema = Type.Object({
 });
 
 export type Secret = Static<typeof SecretSchema>;
+
+// ── Workers Tail API ────────────────────────────────────────────────────────
+export interface TailCreateResponse {
+  id: string;
+  expires_at: string;
+  url: string;
+}
+
+export interface TailEvent {
+  outcome: string;
+  scriptName?: string;
+  eventTimestamp: number;
+  logs: TailLog[];
+  exceptions: TailException[];
+  event: Record<string, unknown> | null;
+}
+
+export interface TailLog {
+  message: unknown[];
+  level: string;
+  timestamp: number;
+}
+
+export interface TailException {
+  name: string;
+  message: string;
+  timestamp: number;
+}

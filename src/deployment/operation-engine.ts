@@ -32,6 +32,7 @@ export interface OperationPlanResult<TReleaseStatus extends string = string> {
   resourceRef?: string;
   releaseStatus?: TReleaseStatus;
   releaseUrl?: string;
+  providerRequestId?: string;
 }
 
 // ── Hooks ───────────────────────────────────────────────────────────────────
@@ -203,6 +204,7 @@ async function executeWithAttempts<TOperation extends GenericOperation, TRelease
       });
       return {
         resourceRef: result.resourceRef,
+        ...(result.providerRequestId ? { providerRequestId: result.providerRequestId } : {}),
         ...(result.releaseStatus ? { releaseStatus: result.releaseStatus } : {}),
         ...(result.releaseUrl ? { releaseUrl: result.releaseUrl } : {}),
       };
