@@ -21,6 +21,7 @@ import { executeReadQuery } from "../../database/read.js";
 import { executeBrowse } from "../../database/browse.js";
 import { inspectDatabase } from "../../database/inspect.js";
 import { applyDatabasePlan } from "../../database/apply.js";
+import { readDatabaseJournal } from "../../database/journal.js";
 export type { DBFilter, DBInput, DBOrder, DBValue } from "./schema.js";
 export { DBFilterSchema, DBOrderSchema, DBSchema, DBValueSchema } from "./schema.js";
 
@@ -166,6 +167,33 @@ export function registerDB(
           };
         }
         // Non-db-plan/1: fall through to provider handler
+      }
+
+      // ── Shared migration_status (reads generic journal) ──────────────
+      if (params.action === "migration_status") {
+        const allEntries = await readDatabaseJournal(cwd);
+        // Cap display to most recent entries (journal is chronological, last = newest)
+        const MAX_DISPLAY = 100;
+        const entries = allEntries.slice(-MAX_DISPLAY);
+        if (entries.length === 0) {
+          return {
+            content: [{ type: "text", text: "No database migration entries found in journal." }],
+            details: { count: 0, entries: [] },
+          };
+        }
+        const total = allEntries.length;
+        const prefix = total > entries.length ? `Showing ${entries.length} of ${total} migration entries:` : `Found ${entries.length} migration entr${entries.length === 1 ? "y" : "ies"}:`;
+        const lines: string[] = [prefix];
+        for (const entry of entries) {
+          const kind = entry.planKind ?? "db-plan/1";
+          const errInfo = entry.errorCode ? ` (error: ${entry.errorCode})` : "";
+          const planLabel = entry.planId.slice(0, 12);
+          lines.push(`  [${kind}] ${planLabel}  ${entry.status}  at ${entry.at}${errInfo}`);
+        }
+        return {
+          content: [{ type: "text", text: lines.join("\n") }],
+          details: { count: entries.length, entries: entries.map((e) => ({ planId: e.planId, planDigest: e.planDigest, status: e.status, at: e.at, errorCode: e.errorCode, planKind: e.planKind })) },
+        };
       }
 
       // ── Provider-dispatched actions ─────────────────────────────────

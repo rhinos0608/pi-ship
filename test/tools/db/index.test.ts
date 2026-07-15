@@ -9,6 +9,7 @@ import { DBFilterSchema, DBOrderSchema, DBSchema, DBValueSchema, type DBInput } 
 import { registerDB } from "../../../src/tools/db/index.js";
 import { ApprovalRegistry } from "../../../src/core/approval.js";
 import type { DatabaseClient, DatabaseClientFactory } from "../../../src/database/client.js";
+import { appendDatabaseJournal, readDatabaseJournal } from "../../../src/database/journal.js";
 
 const environmentSource = { get: (name: string) => name === "PI_SHIP_DATABASE_ENVIRONMENT" ? "development" : undefined };
 const envWithDb = { get: (name: string) => ({ PI_SHIP_DATABASE_ENVIRONMENT: "development", DATABASE_URL: "postgres://user:pass@localhost:5432/test" })[name] };
@@ -143,15 +144,42 @@ describe("DB tool", () => {
     expect(factorySpy).not.toHaveBeenCalled();
   });
 
-  it("routes plan_migration to provider handler and migration_status returns stub", async () => {
+  it("routes plan_migration to provider handler and migration_status reads generic journal", async () => {
     const { execute } = registered({ credentialSource: envWithDb, clientFactory: () => stubClient });
     // plan_migration reaches Railway handler which uses loadState -> defaultState
     const result = await execute("id", { action: "plan_migration" }, undefined, undefined, { cwd });
     expect(result).toMatchObject({
       content: [{ text: expect.stringContaining("Migration plan") }],
     });
-    await expect(execute("id", { action: "migration_status" }, undefined, undefined, { cwd }))
-      .resolves.toMatchObject({ content: [{ text: expect.stringContaining("Migration status") }] });
+    // No journal entries yet — migration_status reports empty
+    const status = await execute("id", { action: "migration_status" }, undefined, undefined, { cwd });
+    expect(status).toMatchObject({
+      content: [{ text: expect.stringContaining("No database migration entries found") }],
+    });
+  });
+
+  it("migration_status returns journal entries from generic journal", async () => {
+    const { execute } = registered({ credentialSource: envWithDb, clientFactory: () => stubClient });
+    const at = new Date().toISOString();
+    const entry = await appendDatabaseJournal(cwd, {
+      version: 1,
+      planId: "test-plan-id",
+      planDigest: "0000000000000000000000000000000000000000000000000000000000000001",
+      targetFingerprint: "0000000000000000000000000000000000000000000000000000000000000002",
+      providerFingerprint: "0000000000000000000000000000000000000000000000000000000000000003",
+      manifestFingerprint: "0000000000000000000000000000000000000000000000000000000000000004",
+      sqlFingerprint: "0000000000000000000000000000000000000000000000000000000000000005",
+      paramFingerprint: "0000000000000000000000000000000000000000000000000000000000000006",
+      environment: "development",
+      risk: "write",
+      statementCount: 1,
+      status: "committed",
+      at,
+    });
+    const result = await execute("id", { action: "migration_status" }, undefined, undefined, { cwd });
+    expect(result).toMatchObject({
+      content: [{ text: expect.stringContaining("Found 1 migration entry") }],
+    });
   });
 
   it("plans without manifest, persists redacted result, retains exact payload until cleanup", async () => {

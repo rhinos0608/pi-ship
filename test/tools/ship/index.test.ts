@@ -527,13 +527,7 @@ describe("ship tool registration", () => {
   });
 
   it("runApprovedOperation logic mints capability and wraps fn", async () => {
-    const { mintCapability } = await import("../../../src/boundary/capability.js");
-    const PROVIDER_RESOURCE: Record<string, string> = {
-      cloudflare: "cloudflare-deployment",
-      vercel: "vercel-deployment",
-      railway: "railway-deployment",
-      neon: "neon-control-plane",
-    };
+    const { executeApprovedOperation } = await import("../../../src/tools/ship/index.js");
 
     const runWithCapabilityCalls: Array<{ cap: unknown }> = [];
     const mockVault = {
@@ -543,22 +537,8 @@ describe("ship tool registration", () => {
       },
     };
 
-    // Replicate the same logic as in index.ts
-    const runApprovedOperation = <T>(binding: { provider: string; planId: string; planDigest: string }, fn: () => T): T => {
-      const resource = PROVIDER_RESOURCE[binding.provider];
-      if (!resource) throw new Error("no resource");
-      const cap = mintCapability({
-        resource,
-        operation: "execute",
-        planId: binding.planId,
-        planDigest: binding.planDigest,
-        riskLevel: "destructive",
-      });
-      return mockVault.runWithCapability(cap, fn);
-    };
-
     const fn = () => "called";
-    const result = runApprovedOperation({ provider: "cloudflare", planId: "p-1", planDigest: "d-1" }, fn);
+    const result = executeApprovedOperation(mockVault as any, { provider: "cloudflare", planId: "p-1", planDigest: "d-1" }, fn);
 
     expect(result).toBe("called");
     expect(runWithCapabilityCalls).toHaveLength(1);
@@ -571,22 +551,12 @@ describe("ship tool registration", () => {
   });
 
   it("runApprovedOperation throws for unknown provider", async () => {
-    const PROVIDER_RESOURCE: Record<string, string> = {
-      cloudflare: "cloudflare-deployment",
-      vercel: "vercel-deployment",
-      railway: "railway-deployment",
-      neon: "neon-control-plane",
-    };
+    const { executeApprovedOperation } = await import("../../../src/tools/ship/index.js");
+
     const mockVault = { runWithCapability: () => { throw new Error("unexpected"); } };
 
-    const runApprovedOperation = <T>(binding: { provider: string }, _fn: () => T): T => {
-      const resource = PROVIDER_RESOURCE[binding.provider];
-      if (!resource) throw new Error("no boundary resource for provider: " + binding.provider);
-      return mockVault.runWithCapability(null, () => {});
-    };
-
     expect(() =>
-      runApprovedOperation({ provider: "unknown" }, () => "x")
+      executeApprovedOperation(mockVault as any, { provider: "unknown" } as any, () => "x")
     ).toThrow(/no boundary resource/);
   });
 
@@ -652,7 +622,7 @@ describe("generic tool import locality", () => {
       "utf8"
     );
     // Key assertion: no `from "..."` import targeting provider-specific paths
-    expect(content).not.toMatch(/from\s+['"][^'"]*\/providers\/(railway|vercel)\/[^'"]*['"]/);
+    expect(content).not.toMatch(/from\s+['"][^'"]*\/providers\/[^'"]+\/[^'"]*['"]/);
   });
 
   it("db/index.ts does not import railway or vercel modules directly", () => {

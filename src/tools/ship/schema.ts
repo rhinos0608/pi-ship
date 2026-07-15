@@ -9,7 +9,7 @@ export const shipSchema = Type.Union(
       { additionalProperties: false }
 
     ),
-    Type.Object({ action: Type.Literal("plan"), environment: Type.Union([Type.Literal("preview"), Type.Literal("production")]) }, { additionalProperties: false }),
+    Type.Object({ action: Type.Literal("plan"), environment: Type.Union([Type.Literal("preview"), Type.Literal("production")]), previewId: Type.Optional(Type.String({ minLength: 1 })) }, { additionalProperties: false }),
     Type.Object({ action: Type.Literal("plan"), environment: Type.Literal("production"), intent: Type.Literal("rollback"), targetReleaseId: Type.String({ minLength: 1 }) }, { additionalProperties: false }),
     Type.Object(
       {

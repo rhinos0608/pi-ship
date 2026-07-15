@@ -22,6 +22,32 @@ const PROVIDER_RESOURCE: Record<string, string> = {
   neon: "neon-control-plane",
 };
 
+/**
+ * Execute a function under a capability minted from an approved plan binding.
+ * The capability is scoped to the provider's boundary resource and carries the
+ * plan's id, digest, and a destructive risk level.  Exported so tests can
+ * exercise the same logic without re-implementing PROVIDER_RESOURCE lookup
+ * and mintCapability.
+ */
+export function executeApprovedOperation<T>(
+  vault: CredentialVault,
+  binding: ApprovedPlanBinding,
+  fn: () => T,
+): T {
+  const resource = PROVIDER_RESOURCE[binding.provider];
+  if (!resource) {
+    throw err("E_CONFIG_INVALID", `no boundary resource for provider: ${binding.provider}`);
+  }
+  const cap = mintCapability({
+    resource,
+    operation: "execute",
+    planId: binding.planId,
+    planDigest: binding.planDigest,
+    riskLevel: "destructive",
+  });
+  return vault.runWithCapability(cap, fn);
+}
+
 export function registerShip(
   pi: ExtensionAPI,
   registry: ApprovalRegistry,
@@ -49,20 +75,8 @@ export function registerShip(
       // Providers call this after authorization to mint a capability scoped to
       // the binding's plan and resource, then execute fn under that capability.
       const runApprovedOperation = deps.vault
-        ? <T>(binding: ApprovedPlanBinding, fn: () => T): T => {
-            const resource = PROVIDER_RESOURCE[binding.provider];
-            if (!resource) {
-              throw err("E_CONFIG_INVALID", `no boundary resource for provider: ${binding.provider}`);
-            }
-            const cap = mintCapability({
-              resource,
-              operation: "execute",
-              planId: binding.planId,
-              planDigest: binding.planDigest,
-              riskLevel: "destructive",
-            });
-            return deps.vault!.runWithCapability(cap, fn);
-          }
+        ? <T>(binding: ApprovedPlanBinding, fn: () => T): T =>
+            executeApprovedOperation(deps.vault!, binding, fn)
         : undefined;
 
       const handlerContext: ShipHandlerContext = {

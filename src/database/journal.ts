@@ -35,6 +35,7 @@ export const DatabaseJournalEntrySchema = Type.Object({
     Type.Literal("failed"),
     Type.Literal("ambiguous"),
   ]),
+  planKind: Type.Optional(Type.String({ minLength: 1, maxLength: 50 })),
   at: Type.String({ minLength: 1, maxLength: 100 }),
   errorCode: Type.Optional(Type.String({ minLength: 1, maxLength: 100 })),
   previousHash: Type.Union([Type.String(hex64), Type.Null()]),
