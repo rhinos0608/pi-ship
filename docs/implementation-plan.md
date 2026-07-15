@@ -370,7 +370,7 @@ Each slice independently verifiable. Write failing test first, make pass, refact
     - state rediscovery,
     - secrets absent from outputs (grep fixtures).
   - Prints `PASS`/`FAIL` and exits non-zero on failure.
-- [ ] Create `pi-ship.schema.json` generated from `ManifestSchema` (manual or via a small `scripts/generate-schema.mjs`).
+- [x] Create `pi-ship.schema.json` with `oneOf` covering Railway V1, Vercel V2, Cloudflare V1, and Neon V1 manifest formats (superseded by shipped schema at repo root; validate with `npx vitest --run test/boundary/`).
 - [ ] Create `docs/adr/0001-single-provider-railway.md` recording the Railway-only MVP decision.
 - [ ] Create `docs/railway-spike.md` manual checklist:
   - [ ] `railway --version` >= expected.
