@@ -36,5 +36,6 @@ export function requestRailwayApproval(
     planDigest: plan.planDigest,
     title: `Approve ${plan.intent} to ${plan.environment}?`,
     summary: renderRailwayPlanSummary(plan),
+    metadata: { domain: "deployment", risk: "destructive" },
   }, registry);
 }

@@ -36,5 +36,6 @@ export function requestVercelApproval(
     planDigest: plan.planDigest,
     title: `Approve ${plan.intent} to ${plan.environment}?`,
     summary: renderVercelPlanSummary(plan),
+    metadata: { domain: "deployment", risk: "destructive" },
   }, registry);
 }

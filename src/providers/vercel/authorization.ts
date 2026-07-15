@@ -38,7 +38,7 @@ export async function authorizeVercelPlanApply(ctx: VercelAuthorizationContext):
   if (computeVercelPlanDigest(ctx.plan) !== ctx.plan.planDigest || ctx.suppliedDigest !== ctx.plan.planDigest) {
     throw err("E_DIGEST_MISMATCH", "supplied digest does not match plan");
   }
-  if (!ctx.registry.isApproved(ctx.plan.planId, ctx.plan.planDigest, ctx.cwd)) {
+  if (!ctx.registry.isApproved(ctx.plan.planId, ctx.plan.planDigest, ctx.cwd, { domain: "deployment", risk: "destructive" })) {
     throw err("E_APPROVAL_REQUIRED", "plan has not been approved");
   }
 
