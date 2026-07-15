@@ -10,6 +10,7 @@ import type { ShipHandler } from "../../tools/ship/contracts.js";
 import type { ShipInput } from "../../tools/ship/schema.js";
 import type { RegistryServices } from "../contracts.js";
 import { requestVercelApproval } from "./approval.js";
+import type { ShipHandlerContext } from "../../tools/ship/contracts.js";
 import { applyVercelPlan } from "./engine.js";
 import { isVercelExecution, type VercelExecution } from "./execution.js";
 import { isVercelManifest, validateVercelManifestSemantics, type VercelManifest } from "./manifest.js";
@@ -137,14 +138,16 @@ async function applyV2(
   signal: AbortSignal | undefined,
   fetchImpl: ((input: string, init?: RequestInit) => Promise<Response>) | undefined,
   services: RegistryServices,
+  runApprovedOperation: ShipHandlerContext["runApprovedOperation"],
 ): Promise<ToolResult> {
   const plan = requirePlan(await services.loadPlan("vercel", params.planId));
+  const runAfterAuthorization = runApprovedOperation
+    ? <T>(fn: () => T) => runApprovedOperation({ provider: "vercel", planId: plan.planId, planDigest: plan.planDigest }, fn)
+    : undefined;
   if (plan.planDigest !== params.planDigest) {
     throw err("E_DIGEST_MISMATCH", "supplied digest does not match stored plan");
   }
   const state = requireState(await services.loadState("vercel"));
-  const appSecretValues = loadAppSecrets(credentialSource, plan.secretNames);
-  const { runtime } = createExecution(pi, cwd, manifest, state, credentialSource, fetchImpl, services);
   const gitInfo = await gatherGit(cwd);
   const sourceRef = plan.source;
   let sourceFingerprint: string | undefined;
@@ -157,8 +160,11 @@ async function applyV2(
     manifest,
     suppliedDigest: params.planDigest,
     registry,
-    runtime,
-    secretValues: appSecretValues,
+    createRuntime: () => {
+      const { runtime } = createExecution(pi, cwd, manifest, state, credentialSource, fetchImpl, services);
+      return runtime;
+    },
+    loadSecrets: () => loadAppSecrets(credentialSource, plan.secretNames),
     currentSource: {
       gitCommit: gitInfo.gitCommit,
       worktreeHash: gitInfo.worktreeHash,
@@ -169,6 +175,7 @@ async function applyV2(
       save: (next) => services.saveState("vercel", next),
     },
     signal,
+    runAfterAuthorization,
   });
   return {
     content: [{
@@ -272,7 +279,7 @@ export const handleVercelShipOps: ShipHandler = async (params, context) => {
     case "plan":
       return planV2(pi, ctx, cwd, manifest, params, credentialSource, registry, signal, fetchImpl, services);
     case "apply_plan":
-      return applyV2(pi, cwd, manifest, params, credentialSource, registry, signal, fetchImpl, services);
+      return applyV2(pi, cwd, manifest, params, credentialSource, registry, signal, fetchImpl, services, context.runApprovedOperation);
     case "status":
       return statusV2(pi, cwd, manifest, credentialSource, signal, fetchImpl, services);
     case "logs":

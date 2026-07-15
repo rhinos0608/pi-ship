@@ -37,12 +37,20 @@ export type VercelReleaseStatus =
 
 export interface ApplyVercelPlanContext extends Omit<VercelAuthorizationContext, "plan" | "state"> {
   plan: VercelPlan;
-  runtime: VercelRuntime;
-  secretValues: Readonly<Record<string, string>>;
+  createRuntime: () => VercelRuntime;
+  loadSecrets: () => Readonly<Record<string, string>>;
   stateStore?: {
     load(): Promise<VercelState>;
     save(state: VercelState): Promise<void>;
   };
+
+  /**
+   * Optional callback invoked after authorization passes.
+   * When provided, wraps the execution body in a capability-backed scope
+   * so credentialSource.get() calls are validated.
+   * Defaults to identity when undefined (managed mode, no vault).
+   */
+  runAfterAuthorization?: <T>(fn: () => T) => T;
 }
 
 // ── Public entry point ──────────────────────────────────────────────────────
@@ -59,40 +67,45 @@ export async function applyVercelPlan(ctx: ApplyVercelPlanContext): Promise<Verc
   return withFileMutationQueue(statePath(ctx.cwd), async () => {
     let state = await store.load();
     await authorizeVercelPlanApply({ ...ctx, state });
-    await verifyRuntimeAccount(ctx);
-    const missing = ctx.plan.secretNames.filter((name) => ctx.secretValues[name] === undefined);
-    if (missing.length > 0) throw err("E_PRECONDITION", `missing secrets: ${missing.join(", ")}`);
+    const runFn = ctx.runAfterAuthorization ?? (<T>(fn: () => T) => fn());
+    return runFn(async () => {
+      const runtime = ctx.createRuntime();
+      const secretValues = ctx.loadSecrets();
+      await verifyRuntimeAccount(runtime, ctx.plan, ctx.signal);
+      const missing = ctx.plan.secretNames.filter((name) => secretValues[name] === undefined);
+      if (missing.length > 0) throw err("E_PRECONDITION", `missing secrets: ${missing.join(", ")}`);
 
-    state = await runOperationPlan<VercelOperation, VercelState, VercelReleaseStatus>(
-      ctx.plan,
-      ctx.plan.operations,
-      buildHooks(ctx),
-    );
+      state = await runOperationPlan<VercelOperation, VercelState, VercelReleaseStatus>(
+        ctx.plan,
+        ctx.plan.operations,
+        buildHooks(ctx, runtime, secretValues),
+      );
 
-    if (!state.history.some((entry) => entry.planId === ctx.plan.planId && entry.digest === ctx.plan.planDigest)) {
-      state = {
-        ...state,
-        history: [
-          ...state.history,
-          {
-            planId: ctx.plan.planId,
-            digest: ctx.plan.planDigest,
-            domain: "app",
-            provider: "vercel",
-            status: "ok",
-            at: new Date().toISOString(),
-          },
-        ],
-      };
-      await store.save(state);
-    }
-    return state;
+      if (!state.history.some((entry) => entry.planId === ctx.plan.planId && entry.digest === ctx.plan.planDigest)) {
+        state = {
+          ...state,
+          history: [
+            ...state.history,
+            {
+              planId: ctx.plan.planId,
+              digest: ctx.plan.planDigest,
+              domain: "app",
+              provider: "vercel",
+              status: "ok",
+              at: new Date().toISOString(),
+            },
+          ],
+        };
+        await store.save(state);
+      }
+      return state;
+    });
   });
 }
 
 // ── Hooks builder ───────────────────────────────────────────────────────────
 
-function buildHooks(ctx: ApplyVercelPlanContext): OperationRunHooks<VercelOperation, VercelState, VercelReleaseStatus> {
+function buildHooks(ctx: ApplyVercelPlanContext, runtime: VercelRuntime, secretValues: Readonly<Record<string, string>>): OperationRunHooks<VercelOperation, VercelState, VercelReleaseStatus> {
   return {
     signal: ctx.signal,
 
@@ -159,7 +172,7 @@ function buildHooks(ctx: ApplyVercelPlanContext): OperationRunHooks<VercelOperat
 
     execute: async (operation) => {
       try {
-        const result = await ctx.runtime.execute(operation, { secretValues: ctx.secretValues }, ctx.signal);
+        const result = await runtime.execute(operation, { secretValues }, ctx.signal);
         return result;
       } catch (cause: unknown) {
         if (ctx.signal?.aborted || (cause instanceof Error && cause.name === "AbortError")) {
@@ -170,7 +183,7 @@ function buildHooks(ctx: ApplyVercelPlanContext): OperationRunHooks<VercelOperat
     },
 
     reconcile: async (operation, resourceRef) => {
-      const result = await ctx.runtime.reconcile(operation, resourceRef, ctx.signal);
+      const result = await runtime.reconcile(operation, resourceRef, ctx.signal);
       return result;
     },
 
@@ -224,15 +237,15 @@ function appendJournalEntry(
 
 // ── Auth helper ─────────────────────────────────────────────────────────────
 
-async function verifyRuntimeAccount(ctx: ApplyVercelPlanContext): Promise<void> {
-  const auth = await ctx.runtime.checkAuth(ctx.signal);
+async function verifyRuntimeAccount(runtime: VercelRuntime, plan: VercelPlan, signal: AbortSignal | undefined): Promise<void> {
+  const auth = await runtime.checkAuth(signal);
   if (auth.status === "unverified") {
     const code = auth.reason === "unauthorized" || auth.reason === "forbidden"
       ? "E_AUTH_MISSING"
       : "E_STATE_CONFLICT";
     throw err(code, auth.safeMessage, auth.retryable);
   }
-  if (auth.value.kind !== ctx.plan.identity.account.kind || auth.value.id !== ctx.plan.identity.account.id) {
+  if (auth.value.kind !== plan.identity.account.kind || auth.value.id !== plan.identity.account.id) {
     throw err("E_STATE_CONFLICT", "provider account does not match approved plan");
   }
 }
