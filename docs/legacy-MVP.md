@@ -429,3 +429,6 @@ Expected: `tsc` exits 0, `vitest` exits 0, `acceptance.mjs` exits 0, `git diff -
 - Browser IDE, multiplayer, billing, custom domains/DNS, preview environments, object storage.
 - Arbitrary SQL, model-supplied migration commands, automatic DB rollback, unattended production deploys.
 - GraphQL Railway API is used only where CLI lacks functionality; live verification stays in `docs/railway-spike.md`.
+
+
+* DEPRECATED - LEGACY DOCUMENT
