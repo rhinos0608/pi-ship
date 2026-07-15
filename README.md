@@ -18,14 +18,18 @@ Actions: `inspect`, `browse`, `query`, `plan`, `apply_plan`, `plan_migration`, `
 
 | Action | Description | DATABASE_URL required | Manifest required | Client created |
 |---|---|---|---|---|
-| `inspect` | Inspect database schema, relations, indexes, enums | Yes | No | Yes (read) |
-| `browse` | Browse table rows with filters, ordering, pagination | Yes | No | Yes (read) |
-| `query` | Execute a read-only SQL query (caller-supplied SQL is classified; only approved read queries execute) | Yes | No | Yes (read) |
-| `plan` | Classify SQL, create metadata-only plan, persist, request approval | Yes | No | No |
-| `apply_plan` (`db-plan/1`) | Apply a shared database plan | Yes | No | Yes (write) |
+| `inspect` | Inspect database schema, relations, indexes, enums | Yes (remote) / No (local)¹ | No | Yes (read) |
+| `browse` | Browse table rows with filters, ordering, pagination | Yes (remote) / No (local)¹ | No | Yes (read) |
+| `query` | Execute a read-only SQL query (caller-supplied SQL is classified; only approved read queries execute) | Yes (remote) / No (local)¹ | No | Yes (read) |
+| `plan` | Classify SQL, create metadata-only plan, persist, request approval | Yes (remote) / No (local)¹ | No | No |
+| `apply_plan` (`db-plan/1`) | Apply a shared database plan | Yes (remote) / No (local)¹ | No | Yes (write) |
 | `apply_plan` (provider plan) | Apply a provider migration plan | No | Yes | No |
 | `plan_migration` | Create a Railway migration plan | No | Yes (Railway) | No |
 | `migration_status` | Show migration status | No | Yes (Railway) | No |
+| `import` | Import JSON/CSV into a local table | No | No | Yes (local write) |
+| `reset` | Wipe and recreate the local database | No | No | No |
+
+> ¹ When `DATABASE_URL` is not set, `DB` actions fall back to an embedded local PGlite instance. No configuration required. See [Local database (zero-config)](#local-database-zero-config).
 
 Provider-specific actions require a provider manifest but not DATABASE_URL.
 
@@ -33,8 +37,9 @@ Provider-specific actions require a provider manifest but not DATABASE_URL.
 
 | Variable | Required for | Notes |
 |---|---|---|
-| `DATABASE_URL` | Shared DB actions (`inspect`, `browse`, `query`, `plan`, `apply_plan`) | PostgreSQL connection string. Never persisted or logged. |
-| `PI_SHIP_DATABASE_ENVIRONMENT` | All DB actions | Must be `development`, `preview`, or `production`. |
+| `DATABASE_URL` | Shared DB actions (remote only) | PostgreSQL connection string. Not required for local fallback (see [Local database](#local-database-zero-config)). Never persisted or logged. |
+| `PI_SHIP_DATABASE_ENVIRONMENT` | Remote DB actions | Must be `development`, `preview`, or `production`. Defaults to `development` for local targets. |
+| `PI_SHIP_LOCAL_DB_GATED` | Local DB writes | When `true`, requires plan/approval ceremony for local database writes (same as remote). Default: open writes — no approval needed. |
 | `PI_SHIP_ALLOW_PRODUCTION_DB_WRITES` | Production DB writes | Must be exactly `true` (lowercase). `TRUE`, `1`, or missing are denied. |
 | `RAILWAY_API_TOKEN` or `RAILWAY_TOKEN` | Railway deploy | |
 | `VERCEL_TOKEN` | Vercel deploy | |
@@ -165,3 +170,78 @@ npm run acceptance
 ```
 
 Live Railway, Vercel, Cloudflare, or Neon behavior is not exercised by tests. See `docs/railway-spike.md` and `docs/adr/`.
+
+## Local database (zero-config)
+
+When `DATABASE_URL` is not set, `DB` actions fall back to an embedded PostgreSQL instance (PGlite) stored at `.pi-ship/local-db/` in your project directory. No configuration required — the data dir is auto-created on first use and gitignored.
+
+### Safety model
+
+- **Open by default:** local writes execute directly — no plan, no approval. This maximizes throughput for scratch/prototype data.
+- **Gated mode:** set `PI_SHIP_LOCAL_DB_GATED=true` to require the full plan → approve → apply ceremony (same as remote targets).
+- `import` and `reset` actions are local-only.
+- All local tool output is labeled "local embedded database" to avoid confusion with production targets.
+
+## Multi-database support
+
+pi-ship supports multiple database engines via the scheme of your `DATABASE_URL`:
+
+| Scheme | Engine | Target kind | Label |
+|--------|--------|-------------|-------|
+| `postgres:` / `postgresql:` | Remote PostgreSQL | Remote | `remote PostgreSQL database` |
+| `mysql:` / `mariadb:` | Remote MySQL/MariaDB | Remote | `remote MySQL database` |
+| `sqlite:` / `.db` / `.sqlite` / `.sqlite3` | Local SQLite file | File | `local SQLite database` |
+| (absent) | Embedded PGlite | Local | `local embedded database` |
+
+### Connection forms
+
+**PostgreSQL** — standard connection string:
+```
+DATABASE_URL=postgres://user:password@host:5432/dbname?sslmode=require
+```
+
+**MySQL / MariaDB** — standard connection string, `?ssl=`/`?sslmode=` for TLS:
+```
+DATABASE_URL=mysql://user:password@host:3306/dbname
+DATABASE_URL=mariadb://user:password@host:3306/dbname
+```
+
+**SQLite** — file path relative to working directory, or `sqlite:` URL:
+```
+DATABASE_URL=data/app.db                                          # plain path
+DATABASE_URL=sqlite:///data/app.db                                 # sqlite: URL
+```
+
+### Engine-native parameter style
+
+Use the dialect's native placeholder style in SQL:
+- **PostgreSQL / PGlite:** `$1`, `$2`, ... (numbered)
+- **MySQL / MariaDB:** `?` (positional)
+- **SQLite:** `?` (positional)
+
+### SQLite containment and gating
+
+SQLite database files are **contained within the working directory**. Any attempt to use a path outside the current project directory (via `..` traversal or absolute path) is rejected with a safe generic error that **does not echo the path**.
+
+By default, mutations to a SQLite file require the full **plan → approve → apply** lifecycle (same as remote targets). Set the following to bypass the lifecycle for direct exploratory writes:
+
+```
+PI_SHIP_SQLITE_OPEN=true
+```
+
+Only the exact lowercase string `true` enables open writes. `TRUE`, `True`, `1`, or unset keep the gated lifecycle.
+
+### PGlite flag scope
+
+`PI_SHIP_LOCAL_DB_GATED=true` affects only the embedded PGlite scratch database. It does not affect SQLite file targets. SQLite files have their own independent gating via `PI_SHIP_SQLITE_OPEN`.
+
+### MySQL safety
+
+MySQL connections are created with `multipleStatements: false` — the `mysql2` driver rejects any query string containing multiple statements. All parameter binding uses `?` positional placeholders through `execute()` (not `query()`). TLS can be configured via standard URL query parameters (`?ssl=`, `?sslmode=`, `?sslrootcert=`).
+
+### Unsupported engines
+
+- **Microsoft SQL Server** — not supported (requires different driver, SQL dialect, and safety model)
+- **MongoDB / Redis** — not supported (not SQL databases)
+- **SQL translation** — not supported (no automatic translation between dialects)
+- **Knex / Kysely / SQLAlchemy-style delegation** — not supported (uses direct driver calls)
