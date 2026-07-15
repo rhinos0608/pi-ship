@@ -1,6 +1,6 @@
 # ADR 0001: Railway-only provider in MVP
 
-Status: accepted
+Status: Superseded by [ADR 0002: Provider expansion and operation safety](0002-provider-expansion-and-operation-safety.md)
 
 ## Decision
 
