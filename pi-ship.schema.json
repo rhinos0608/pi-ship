@@ -1,30 +1,133 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$schema": "https://json-schema.org/draft/2019-09/schema",
   "$id": "https://pi-ship.dev/schema.json",
   "type": "object",
-  "additionalProperties": false,
-  "required": ["name", "provider", "project", "run"],
-  "properties": {
-    "name": { "type": "string", "minLength": 1 },
-    "provider": { "const": "railway" },
-    "project": { "type": "string", "minLength": 1 },
-    "run": { "$ref": "#/$defs/commandObject" },
-    "build": { "$ref": "#/$defs/commandObject" },
-    "checks": { "type": "array", "items": { "$ref": "#/$defs/argv" }, "minItems": 1 },
-    "secrets": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 },
-    "db": {
-      "type": "object", "additionalProperties": false,
+  "oneOf": [
+    {
+      "description": "Railway V1 manifest",
+      "additionalProperties": false,
+      "required": ["name", "provider", "project", "run"],
       "properties": {
-        "migrate": {
-          "type": "object", "additionalProperties": false, "required": ["command"],
-          "properties": { "command": { "$ref": "#/$defs/argv" }, "allowProductionMigrations": { "type": "boolean" } }
+        "name": { "type": "string", "minLength": 1 },
+        "provider": { "const": "railway" },
+        "version": { "const": 1 },
+        "project": { "type": "string", "minLength": 1 },
+        "run": { "$ref": "#/$defs/commandObject" },
+        "build": { "$ref": "#/$defs/commandObject" },
+        "checks": { "$ref": "#/$defs/checks" },
+        "secrets": { "$ref": "#/$defs/secrets" },
+        "databaseAccess": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "mode": { "enum": ["managed", "warn", "exclusive"] }
+          }
         },
-        "provision": { "enum": ["railway-postgres", "external"] }
+        "db": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "migrate": {
+              "type": "object", "additionalProperties": false, "required": ["command"],
+              "properties": {
+                "command": { "$ref": "#/$defs/argv" },
+                "allowProductionMigrations": { "type": "boolean" }
+              }
+            },
+            "provision": { "enum": ["railway-postgres", "external"] }
+          }
+        }
+      }
+    },
+    {
+      "description": "Neon V1 manifest",
+      "additionalProperties": false,
+      "required": ["provider", "version", "project"],
+      "properties": {
+        "provider": { "const": "neon" },
+        "version": { "const": 1 },
+        "project": { "type": "string", "minLength": 1 },
+        "pgVersion": { "type": "integer", "minimum": 14, "maximum": 18 },
+        "regionId": { "type": "string", "minLength": 1 },
+        "branch": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "name": { "type": "string", "minLength": 1 },
+            "databaseName": { "type": "string", "minLength": 1 },
+            "roleName": { "type": "string", "minLength": 1 }
+          }
+        },
+        "compute": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "minCu": { "type": "integer", "minimum": 0 },
+            "maxCu": { "type": "integer", "minimum": 0 },
+            "suspendTimeoutSeconds": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "migrations": { "$ref": "#/$defs/commandObject" }
+      }
+    },
+    {
+      "description": "Cloudflare V1 manifest",
+      "additionalProperties": false,
+      "required": ["provider", "version", "accountId", "name", "mainModule", "compatibilityDate"],
+      "properties": {
+        "provider": { "const": "cloudflare" },
+        "version": { "const": 1 },
+        "accountId": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "mainModule": { "type": "string", "minLength": 1 },
+        "compatibilityDate": { "type": "string", "minLength": 1 },
+        "compatibilityFlags": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "secrets": { "$ref": "#/$defs/secrets" },
+        "source": { "type": "string" }
+      }
+    },
+    {
+      "description": "Vercel V2 manifest",
+      "additionalProperties": false,
+      "required": ["version", "name", "app"],
+      "properties": {
+        "version": { "const": 2 },
+        "name": { "type": "string", "minLength": 1 },
+        "app": {
+          "type": "object", "additionalProperties": false,
+          "required": ["provider", "config"],
+          "properties": {
+            "provider": { "const": "vercel" },
+            "config": {
+              "type": "object", "additionalProperties": false,
+              "required": ["projectName"],
+              "properties": {
+                "projectName": { "type": "string", "minLength": 1 },
+                "teamId": { "type": "string", "minLength": 1 },
+                "rootDirectory": { "type": "string", "minLength": 1 }
+              }
+            }
+          }
+        },
+        "database": {
+          "type": "object", "additionalProperties": false,
+          "required": ["provider", "config"],
+          "properties": {
+            "provider": { "const": "external" },
+            "config": {
+              "type": "object", "additionalProperties": false,
+              "required": ["urlSecretName"],
+              "properties": {
+                "urlSecretName": { "type": "string", "minLength": 1 }
+              }
+            }
+          }
+        },
+        "checks": { "$ref": "#/$defs/checks" },
+        "secrets": { "$ref": "#/$defs/secrets" }
       }
     }
-  },
+  ],
   "$defs": {
     "argv": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 },
-    "commandObject": { "type": "object", "additionalProperties": false, "required": ["command"], "properties": { "command": { "$ref": "#/$defs/argv" } } }
+    "commandObject": { "type": "object", "additionalProperties": false, "required": ["command"], "properties": { "command": { "$ref": "#/$defs/argv" } } },
+    "checks": { "type": "array", "items": { "$ref": "#/$defs/argv" }, "minItems": 1 },
+    "secrets": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 }
   }
 }
