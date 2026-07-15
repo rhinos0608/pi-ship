@@ -6,7 +6,7 @@ import { err } from "../../core/errors.js";
 import type { ToolResult } from "../../core/types.js";
 import { loadAppSecrets, type CredentialSource } from "../../deployment/credentials.js";
 import type { RegistryServices } from "../contracts.js";
-import type { ShipHandler } from "../../tools/ship/contracts.js";
+import type { ShipHandler, ShipHandlerContext } from "../../tools/ship/contracts.js";
 import type { ShipInput } from "../../tools/ship/schema.js";
 import type { ProviderAdapter } from "./adapter.js";
 import { requestRailwayApproval } from "./approval.js";
@@ -114,11 +114,11 @@ async function applyAction(
   manifest: RailwayManifest,
   planId: string,
   planDigest: string,
-  envReader: (names: string[]) => Record<string, string | undefined>,
   source: CredentialSource,
   registry: ApprovalRegistry,
   signal: AbortSignal | undefined,
   services: RegistryServices,
+  runApprovedOperation: ShipHandlerContext["runApprovedOperation"],
 ): Promise<ToolResult> {
   const plan = requireRailwayPlan(await services.loadPlan("railway", planId));
   const state = requireRailwayState(await services.loadState("railway"));
@@ -131,22 +131,32 @@ async function applyAction(
     state,
     signal,
   });
-  const adapter = createRailwayExecution(pi, manifest, state, source, plan.secretNames, services);
-  return applyRailwayPlan({
-    adapter,
-    manifest: plan.manifest,
-    plan,
-    cwd,
-    envReader,
-    piExec: pi.exec.bind(pi),
-    registry,
-    suppliedDigest: planDigest,
-    stateStore: {
-      load: async () => requireRailwayState(await services.loadState("railway")),
-      save: (next) => services.saveState("railway", next),
-    },
-    signal,
-  });
+  const doApply = () => {
+    const adapter = createRailwayExecution(pi, manifest, state, source, plan.secretNames, services);
+    const envReader = (names: string[]) => {
+      const values: Record<string, string | undefined> = {};
+      for (const name of names) values[name] = source.get(name);
+      return values;
+    };
+    return applyRailwayPlan({
+      adapter,
+      manifest: plan.manifest,
+      plan,
+      cwd,
+      envReader,
+      piExec: pi.exec.bind(pi),
+      registry,
+      suppliedDigest: planDigest,
+      stateStore: {
+        load: async () => requireRailwayState(await services.loadState("railway")),
+        save: (next) => services.saveState("railway", next),
+      },
+      signal,
+    });
+  };
+  return runApprovedOperation
+    ? runApprovedOperation({ provider: "railway", planId: plan.planId, planDigest: plan.planDigest }, doApply)
+    : doApply();
 }
 
 async function statusAction(
@@ -207,7 +217,7 @@ export const handleRailwayShipOps: ShipHandler = async (params, context) => {
     case "plan":
       return planAction(ctx, cwd, manifest, params, registry, services);
     case "apply_plan":
-      return applyAction(pi, cwd, manifest, params.planId, params.planDigest, envReader, credentialSource, registry, signal, services);
+      return applyAction(pi, cwd, manifest, params.planId, params.planDigest, credentialSource, registry, signal, services, context.runApprovedOperation);
     case "status":
       return statusAction(pi, manifest, credentialSource, signal, services);
     case "logs":

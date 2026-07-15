@@ -6,7 +6,7 @@ import { readPersisted, saveAtomic } from "../../persistence/state-store.js";
 const Strict = { additionalProperties: false } as const;
 const Service = Type.Object({ app: Type.Optional(Type.String()), postgres: Type.Optional(Type.String()) }, Strict);
 const Release = Type.Object({ id: Type.String({ minLength: 1 }), digest: Type.String({ minLength: 1 }), url: Type.Optional(Type.String()), at: Type.String({ minLength: 1 }) }, Strict);
-const History = Type.Object({ planId: Type.String({ minLength: 1 }), digest: Type.String({ minLength: 1 }), at: Type.String({ minLength: 1 }), status: Type.String({ minLength: 1 }) }, Strict);
+const History = Type.Object({ planId: Type.String({ minLength: 1 }), digest: Type.String({ minLength: 1 }), at: Type.String({ minLength: 1 }), status: Type.Union([Type.Literal("ok"), Type.Literal("failed")]) }, Strict);
 export const LocalStateSchema = Type.Object({ version: Type.Literal(1), provider: Type.Literal("railway"), projectId: Type.Optional(Type.String()), projectName: Type.Optional(Type.String()), environmentId: Type.Optional(Type.String()), environmentName: Type.Optional(Type.String()), serviceIds: Service, serviceNames: Type.Optional(Service), lastRelease: Type.Optional(Release), history: Type.Array(History) }, Strict);
 export type LocalState = Static<typeof LocalStateSchema>;
 
