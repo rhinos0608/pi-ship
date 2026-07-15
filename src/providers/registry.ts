@@ -14,6 +14,8 @@ import type {
 } from "./contracts.js";
 import { railwayPackage } from "./railway/package.js";
 import { vercelPackage } from "./vercel/package.js";
+import { cloudflarePackage } from "./cloudflare/package.js";
+import { neonPackage } from "./neon/package.js";
 
 function duplicateIds(packages: readonly ProviderPackage[]): string[] {
   const seen = new Set<string>();
@@ -173,7 +175,7 @@ export function createProviderRegistry(packages: readonly ProviderPackage[]): Pr
   return new ProviderRegistry(packages);
 }
 
-export const providerRegistry = createProviderRegistry([railwayPackage, vercelPackage]);
+export const providerRegistry = createProviderRegistry([railwayPackage, vercelPackage, cloudflarePackage, neonPackage]);
 
 export function createProviderExecution(
   manifest: unknown,

@@ -4,6 +4,8 @@ import { registerDB } from "./tools/db/index.js";
 import { registerShip } from "./tools/ship/index.js";
 import { ApprovalRegistry } from "./core/approval.js";
 import { providerRegistry } from "./providers/registry.js";
+import { environmentSource } from "./core/environment.js";
+import { registerBoundary } from "./boundary/integration/register.js";
 
 export { registerShip } from "./tools/ship/index.js";
 export type { ShipHandler, ShipHandlerContext } from "./tools/ship/contracts.js";
@@ -13,11 +15,28 @@ export { registerDB, DBFilterSchema, DBOrderSchema, DBSchema, DBValueSchema } fr
 export type { DatabaseHandler, DatabaseHandlerContext } from "./tools/db/contracts.js";
 export type { DBFilter, DBInput, DBOrder, DBValue } from "./tools/db/schema.js";
 
-export default function piShipExtension(pi: ExtensionAPI): void {
+export default async function piShipExtension(pi: ExtensionAPI): Promise<void> {
   const approvalRegistry = new ApprovalRegistry(process.cwd());
+  const credentialSource = environmentSource();
+
+  // Register boundary (null if managed mode or no manifest).
+  // On misconfiguration, emit diagnostic and fall back to raw credential source
+  // so gate, ship, DB, and provider registrations still complete.
+  let boundary: Awaited<ReturnType<typeof registerBoundary>>;
+  try {
+    boundary = await registerBoundary(pi, process.cwd(), credentialSource, approvalRegistry);
+  } catch (e: unknown) {
+    console.error("pi-ship: boundary registration failed, continuing without boundary:", e);
+    boundary = null;
+  }
+  const effectiveSource = boundary?.vault.asCredentialSource() ?? credentialSource;
+
   registerGate(pi, approvalRegistry);
-  registerShip(pi, approvalRegistry);
-  const database = registerDB(pi, approvalRegistry);
+  registerShip(pi, approvalRegistry, {
+    credentialSource: effectiveSource,
+    vault: boundary?.vault,
+  });
+  const database = registerDB(pi, approvalRegistry, { credentialSource: effectiveSource });
   providerRegistry.registerCommands(pi, approvalRegistry, (cwd) => providerRegistry.services(cwd));
   pi.on("session_shutdown", async () => { approvalRegistry.clear(); database.cleanup(); });
 }
