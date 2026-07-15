@@ -5,6 +5,12 @@ import type { CredentialSource } from "../../deployment/credentials.js";
 import type { RegistryServices } from "../../providers/contracts.js";
 import type { ShipInput } from "./schema.js";
 
+export interface ApprovedPlanBinding {
+  provider: "cloudflare" | "vercel" | "railway" | "neon";
+  planId: string;
+  planDigest: string;
+}
+
 export interface ShipHandlerContext {
   manifest: unknown;
   cwd: string;
@@ -15,6 +21,13 @@ export interface ShipHandlerContext {
   signal?: AbortSignal;
   fetchImpl?: (input: string, init?: RequestInit) => Promise<Response>;
   services: RegistryServices;
+
+  /**
+   * When a CredentialVault is active (exclusive mode), wraps execution in a
+   * capability-backed ALS scope so credentialSource.get() calls are validated.
+   * Undefined in managed mode — callers fall back to direct execution.
+   */
+  runApprovedOperation?<T>(binding: ApprovedPlanBinding, fn: () => T): T;
 }
 
 export type ShipHandler = (
