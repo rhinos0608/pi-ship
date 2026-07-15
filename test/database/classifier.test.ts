@@ -317,6 +317,12 @@ describe("database classifier", () => {
     it("classifies ALTER ENUM RENAME VALUE as destructive", async () => {
       await expect(classifySQL("ALTER TYPE mood RENAME VALUE 'happy' TO 'glad'")).resolves.toMatchObject({ riskLevel: "destructive" });
     });
+
+    it("classifies RenameStmt as destructive", async () => {
+      const result = await classifySQL("ALTER TABLE t RENAME TO t2");
+      expect(result.riskLevel).toBe("destructive");
+      expect(result.destructiveReasons).toContain("RENAME");
+    });
   });
 
   // ── Hard-blocked statements ───────────────────────────────────────

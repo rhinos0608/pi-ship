@@ -34,8 +34,8 @@ export const OperationJournalEntrySchema = Type.Union([
   Type.Object({ ...Base, status: Type.Literal("ok"), resourceRef: Type.String({ minLength: 1 }), observedStateFingerprint: Type.String({ minLength: 1 }), providerRequestId: Type.Optional(Type.String()), ...ReleaseMetadata }, Strict),
   Type.Object({ ...Base, status: Type.Literal("fail"), error: ErrorSchema }, Strict),
   Type.Object({ ...Base, status: Type.Literal("ambiguous"), reason: Reason, safeMessage: Type.String({ minLength: 1 }), resourceRef: Type.Optional(Type.String({ minLength: 1 })) }, Strict),
-  Type.Object({ ...Base, status: Type.Literal("reconciled"), outcome: Type.Literal("matches_expected"), resourceRef: Type.Optional(Type.String()), observedStateFingerprint: Type.String({ minLength: 1 }), ...ReleaseMetadata }, Strict),
-  Type.Object({ ...Base, status: Type.Literal("reconciled"), outcome: Type.Union([Type.Literal("not_applied"), Type.Literal("conflict")]), resourceRef: Type.Optional(Type.String()), observedStateFingerprint: Type.String({ minLength: 1 }) }, Strict),
+  Type.Object({ ...Base, status: Type.Literal("reconciled"), outcome: Type.Literal("matches_expected"), resourceRef: Type.String({ minLength: 1 }), observedStateFingerprint: Type.String({ minLength: 1 }), ...ReleaseMetadata }, Strict),
+  Type.Object({ ...Base, status: Type.Literal("reconciled"), outcome: Type.Union([Type.Literal("not_applied"), Type.Literal("conflict")]), resourceRef: Type.Optional(Type.String({ minLength: 1 })), observedStateFingerprint: Type.String({ minLength: 1 }) }, Strict),
   Type.Object({ ...Base, status: Type.Literal("reconciled"), outcome: Type.Literal("unverified"), reason: Reason, safeMessage: Type.String({ minLength: 1 }) }, Strict),
 ]);
 export type OperationJournalEntry = Static<typeof OperationJournalEntrySchema>;

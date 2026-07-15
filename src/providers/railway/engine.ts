@@ -95,8 +95,9 @@ export async function applyRailwayPlan(ctx: ApplyRailwayContext): Promise<ToolRe
 
     if (plan.intent === "rollback") {
       if (!plan.targetReleaseId) throw err("E_PRECONDITION", "rollback plan missing targetReleaseId");
+      if (!state.serviceIds.app) throw err("E_PRECONDITION", "no application service bound for rollback");
       await step("rollback", true, async () => {
-        const r = await adapter.rollback(state.serviceIds.app ?? "", plan.targetReleaseId!, signal);
+        const r = await adapter.rollback(state.serviceIds.app!, plan.targetReleaseId!, signal);
         if (!r.ok) throw err("E_PROVIDER", "rollback failed");
       });
       return okResult(plan, "Rollback applied. Database state untouched.");
@@ -157,7 +158,7 @@ export async function applyRailwayPlan(ctx: ApplyRailwayContext): Promise<ToolRe
       at: new Date().toISOString(),
       status: "ok",
     });
-    await saveRailwayState(cwd, state);
+    await stateStore.save(state);
 
     return okResult(plan, `Deployed ${manifest.name} to ${plan.environment}. Release: ${state.lastRelease?.id}`);
   });

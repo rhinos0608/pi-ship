@@ -20,7 +20,7 @@ Actions: `inspect`, `browse`, `query`, `plan`, `apply_plan`, `plan_migration`, `
 |---|---|---|---|---|
 | `inspect` | Inspect database schema, relations, indexes, enums | Yes | No | Yes (read) |
 | `browse` | Browse table rows with filters, ordering, pagination | Yes | No | Yes (read) |
-| `query` | Execute a read-only SQL query | Yes | No | Yes (read) |
+| `query` | Execute a read-only SQL query (caller-supplied SQL is classified; only approved read queries execute) | Yes | No | Yes (read) |
 | `plan` | Classify SQL, create metadata-only plan, persist, request approval | Yes | No | No |
 | `apply_plan` (`db-plan/1`) | Apply a shared database plan | Yes | No | Yes (write) |
 | `apply_plan` (provider plan) | Apply a provider migration plan | No | Yes | No |

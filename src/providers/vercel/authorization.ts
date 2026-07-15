@@ -43,6 +43,7 @@ export async function authorizeVercelPlanApply(ctx: VercelAuthorizationContext):
   }
 
   const created = Date.parse(ctx.plan.createdAt);
+  if (Number.isFinite(created) && created > (ctx.now ?? Date.now()) + 60_000) throw err("E_PLAN_STALE", "plan timestamp is in the future");
   if (!Number.isFinite(created) || (ctx.now ?? Date.now()) - created > 30 * 60 * 1000) {
     throw err("E_PLAN_STALE", "plan is stale; regenerate");
   }

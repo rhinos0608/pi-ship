@@ -226,6 +226,10 @@ async function logsV2(
   if (!lastRelease) {
     return { content: [{ type: "text", text: "No deployment found in any environment." }], details: {} };
   }
+  const plan = requirePlan(await services.loadPlan("vercel", lastRelease.planId));
+  if (plan.planDigest !== lastRelease.digest) {
+    throw err("E_DIGEST_MISMATCH", "stored plan digest does not match release digest");
+  }
   const { runtime } = createExecution(pi, cwd, manifest, state, credentialSource, fetchImpl, services);
   const requestedLines = params.lines;
   const bounded = requestedLines !== undefined && Number.isFinite(requestedLines)

@@ -95,15 +95,25 @@ export interface VercelClient {
 // ── Default backoff ─────────────────────────────────────────────────────────────
 function defaultBackoff(attempt: number, retryAfter?: number | null): number {
   if (retryAfter != null && retryAfter > 0 && Number.isFinite(retryAfter)) {
-    return retryAfter * 1000;
+    return Math.min(retryAfter * 1000, 30000);
   }
   // Exponential: 1s, 2s, 4s, 8s … capped at 30s with ±25% jitter
   const base = Math.min(1000 * Math.pow(2, attempt), 30000);
   return Math.round(base * (0.75 + Math.random() * 0.5));
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException("Aborted", "AbortError"));
+      return;
+    }
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener("abort", () => {
+      clearTimeout(timer);
+      reject(new DOMException("Aborted", "AbortError"));
+    }, { once: true });
+  });
 }
 
 // ── Error extraction from Vercel error bodies ───────────────────────────────────
@@ -266,7 +276,7 @@ export function createVercelClient(
             const retryAfterHeader = res.headers.get("Retry-After");
             const retryAfter = retryAfterHeader ? Number(retryAfterHeader) : null;
             const waitMs = backoffFn(attempt, Number.isFinite(retryAfter) && retryAfter! > 0 ? retryAfter : null);
-            await delay(waitMs);
+            await delay(waitMs, opts.signal);
             lastError = typedError;
             continue;
           }
@@ -280,7 +290,7 @@ export function createVercelClient(
           // Network error — retry if safe
           if (opts.safe && attempt < maxRetries) {
             const waitMs = backoffFn(attempt, null);
-            await delay(waitMs);
+            await delay(waitMs, opts.signal);
             lastError = err("E_PROVIDER", safeMsg("Vercel transport error"), true);
             continue;
           }

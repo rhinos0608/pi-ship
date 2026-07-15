@@ -5,7 +5,7 @@ import { readPersisted, saveAtomic } from "../../persistence/state-store.js";
 
 const Strict = { additionalProperties: false } as const;
 const Account = Type.Object({ kind: Type.Union([Type.Literal("team"), Type.Literal("user")]), id: Type.String({ minLength: 1 }) }, Strict);
-const ReleaseStatus = Type.Union([Type.Literal("queued"), Type.Literal("building"), Type.Literal("ready"), Type.Literal("error"), Type.Literal("cancelled"), Type.Literal("blocked"), Type.Literal("unknown")]);
+const ReleaseStatus = Type.Union([Type.Literal("queued"), Type.Literal("building"), Type.Literal("ready"), Type.Literal("error"), Type.Literal("canceled"), Type.Literal("blocked"), Type.Literal("unknown")]);
 const AppEnvironment = Type.Object({ targetFingerprint: Type.String({ minLength: 1 }), lastRelease: Type.Optional(Type.Object({ id: Type.String({ minLength: 1 }), planId: Type.String({ minLength: 1 }), digest: Type.String({ minLength: 1 }), status: ReleaseStatus, url: Type.Optional(Type.String()), at: Type.String({ minLength: 1 }) }, Strict)) }, Strict);
 const App = Type.Object({ provider: Type.Literal("vercel"), account: Account, accountFingerprint: Type.String({ minLength: 1 }), project: Type.Object({ id: Type.String({ minLength: 1 }), name: Type.String({ minLength: 1 }), fingerprint: Type.String({ minLength: 1 }) }, Strict), environments: Type.Object({ preview: Type.Optional(AppEnvironment), production: Type.Optional(AppEnvironment) }, Strict) }, Strict);
 const Database = Type.Record(Type.String({ minLength: 1 }), Type.Object({ provider: Type.Literal("external"), connectionSecretName: Type.String({ minLength: 1 }), targetFingerprint: Type.String({ minLength: 1 }) }, Strict));

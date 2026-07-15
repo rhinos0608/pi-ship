@@ -172,7 +172,7 @@ const destructiveTop = new Set(["DropStmt", "TruncateStmt"]);
 const allTags = new Set([...supportTags, ...blockedTop, ...additiveCreate, ...destructiveTop,
   "SelectStmt", "InsertStmt", "UpdateStmt", "DeleteStmt", "MergeStmt",
   "AlterTableStmt", "AlterEnumStmt", "SetOperationStmt",
-  "CommentStmt", "AlterTypeStmt",
+  "CommentStmt", "AlterTypeStmt", "RenameStmt",
 ]);
 
 // ── Tags representing actual SQL statements (not support/expression nodes) ──

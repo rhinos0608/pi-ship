@@ -400,7 +400,7 @@ export function createVercelRuntime(
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       const code = isShipError(e) ? e.code : "E_PROVIDER";
-      return providerFailed(code, msg);
+      return providerFailed(code, msg, isShipError(e) ? e.retryable : false);
     }
 
     // Build deployment file references

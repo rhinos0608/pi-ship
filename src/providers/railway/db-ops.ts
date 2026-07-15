@@ -7,6 +7,7 @@ import { loadAppSecrets, type CredentialSource } from "../../deployment/credenti
 import type { DatabaseHandler } from "../../tools/db/contracts.js";
 import type { RegistryServices } from "../contracts.js";
 import { requestRailwayApproval } from "./approval.js";
+import { writeApprovalSidecar } from "../../core/approval-store.js";
 import { authorizeRailwayPlanApply } from "./authorization.js";
 import { applyRailwayPlan } from "./engine.js";
 import { isRailwayExecution } from "./execution.js";
@@ -60,6 +61,9 @@ async function planMigration(
   });
   await services.persistPlan("railway", plan);
   const approval = await requestRailwayApproval(ctx, plan, registry);
+  if (approval.approved && approval.approvedAt) {
+    await writeApprovalSidecar(cwd, plan.planId, plan.planDigest, approval.approvedAt, environment);
+  }
   return {
     content: [{
       type: "text",

@@ -277,7 +277,7 @@ export function applyVerifiedVercelState(
     const status = releaseStatus === "ready" ? "ready"
       : releaseStatus === "building" || releaseStatus === "queued" || releaseStatus === "initializing" ? "building"
       : releaseStatus === "error" ? "error"
-      : releaseStatus === "canceled" ? "cancelled"
+      : releaseStatus === "canceled" ? "canceled"
       : releaseStatus === "blocked" ? "blocked"
       : "unknown";
     next.app.environments[plan.environment] = {

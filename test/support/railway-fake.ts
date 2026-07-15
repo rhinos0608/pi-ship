@@ -27,13 +27,13 @@ export function createFakeProvider(config?: {
   projects: Map<string, string>;
   services: Map<string, string>;
   variables: Map<string, Record<string, string | undefined>>;
-  releases: Map<string, { releaseId: string; url?: string; rolledBack?: boolean }>;
+  releases: Map<string, { releaseId: string; serviceId: string; url?: string; rolledBack?: boolean }>;
   injectFailure(method: keyof FailureInjection, error: ShipError): void;
 } {
   const projects = new Map(Object.entries(config?.initial?.projects ?? {}));
   const services = new Map(Object.entries(config?.initial?.services ?? {}));
   const variables = new Map<string, Record<string, string | undefined>>();
-  const releases = new Map<string, { releaseId: string; url?: string; rolledBack?: boolean }>();
+  const releases = new Map<string, { releaseId: string; serviceId: string; url?: string; rolledBack?: boolean }>();
   const failures: FailureInjection = { ...config?.failures };
   const calls: FakeCall[] = [];
 
@@ -96,7 +96,7 @@ export function createFakeProvider(config?: {
       onUpdate?.("deploy started");
       const id = uid("rel");
       const url = `https://${id}.railway.app`;
-      releases.set(id, { releaseId: id, url });
+      releases.set(id, { releaseId: id, serviceId, url });
       return { releaseId: id, url };
     },
     async status(serviceId) {
@@ -109,12 +109,15 @@ export function createFakeProvider(config?: {
       maybeFail("logs");
       return `log line 1\nlog line 2`;
     },
-    async rollback(_serviceId, releaseId) {
-      record("rollback", [_serviceId, releaseId]);
+    async rollback(serviceId, releaseId) {
+      record("rollback", [serviceId, releaseId]);
       maybeFail("rollback");
       const rel = releases.get(releaseId);
       if (!rel || rel.rolledBack) {
         throw err("E_PRECONDITION", "cannot rollback this deployment");
+      }
+      if (rel.serviceId !== serviceId) {
+        throw err("E_STATE_CONFLICT", "rollback target is bound to different Railway ownership");
       }
       rel.rolledBack = true;
       return { ok: true, releaseId: uid("rel") };

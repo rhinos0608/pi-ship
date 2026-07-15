@@ -27,7 +27,7 @@ export async function authorizeRailwayPlanApply(ctx: RailwayAuthorizationContext
     throw err("E_STATE_CONFLICT", "current manifest differs from approved plan");
   }
   const actions = ctx.plan.resourceActions.map((a) => a.resource);
-  if (ctx.plan.intent === "deploy" && (!actions.includes("deployment") || actions.includes("rollback"))) {
+  if (ctx.plan.intent === "deploy" && (!actions.includes("deployment") || ctx.plan.resourceActions.some((a) => a.action === "rollback"))) {
     throw err("E_STATE_CONFLICT", "deploy plan intent is incompatible with resource actions");
   }
   if (ctx.plan.intent === "migration" && (actions.includes("deployment") || actions.includes("project") || actions.includes("service"))) {

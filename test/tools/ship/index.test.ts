@@ -516,6 +516,7 @@ describe("ship routing", () => {
     expect(vercelProviderPackage.getDatabaseOpsHandler).toBeDefined();
     const handler = vercelProviderPackage.getDatabaseOpsHandler!({ version: 2, name: "x", app: { provider: "vercel", config: { projectName: "x" } } });
     expect(handler).toBeDefined();
+    await expect(handler!({} as any, { manifest: { version: 2, name: "x", app: { provider: "vercel", config: { projectName: "x" } } } } as any)).rejects.toMatchObject({ code: "E_PHASE_UNSUPPORTED" });
   });
 });
 

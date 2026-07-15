@@ -23,9 +23,9 @@ export async function gatherGit(cwd: string): Promise<{ gitCommit: string; gitDi
   }
   try {
     const { stdout: diff } = await execFileAsync("git", ["diff", "HEAD"], { cwd });
-    const { stdout: untracked } = await execFileAsync("git", ["ls-files", "--others", "--exclude-standard"], { cwd });
+    const { stdout: untracked } = await execFileAsync("git", ["ls-files", "--others", "--exclude-standard", "-z"], { cwd });
     const hash = createHash("sha256").update(diff);
-    for (const file of untracked.split("\n").filter(Boolean).sort()) {
+    for (const file of untracked.split("\0").filter(Boolean).sort()) {
       hash.update(file);
       hash.update(await readFile(`${cwd}/${file}`));
     }
