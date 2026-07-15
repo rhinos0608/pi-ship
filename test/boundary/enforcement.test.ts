@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { BoundaryEnforcer } from "../../src/boundary/enforcement.js";
 import { ProtectedResourceRegistry, createDatabaseResource, createVercelResource, createRailwayResource, createCloudflareResource } from "../../src/boundary/resource.js";
+import { mintCapability, validateCapability } from "../../src/boundary/capability.js";
+import { ApprovalRegistry } from "../../src/core/approval.js";
 import type { BoundaryCapability } from "../../src/boundary/types.js";
 
 describe("BoundaryEnforcer", () => {
@@ -24,7 +26,7 @@ describe("BoundaryEnforcer", () => {
 
     it("throws for exclusive mode without boundary", () => {
       const enforcer = new BoundaryEnforcer("exclusive", registry, false);
-      expect(() => enforcer.validateStartup()).toThrow("requires an active boundary");
+      expect(() => enforcer.validateStartup()).toThrow("requires an active boundary (install pi-permission-system)");
     });
 
     it("passes for exclusive mode with boundary", () => {
@@ -125,9 +127,10 @@ describe("BoundaryEnforcer", () => {
     });
 
     it("exclusive mode blocks protected credentials with expired capability", () => {
-      const enforcer = new BoundaryEnforcer("exclusive", registry, true);
+      const approvalRegistry = new ApprovalRegistry();
+      const enforcer = new BoundaryEnforcer("exclusive", registry, true, approvalRegistry);
       const expired: BoundaryCapability = {
-        resource: "db", operation: "execute", planDigest: "x", riskLevel: "write",
+        resource: "db", operation: "execute", planId: "p-1", planDigest: "x", riskLevel: "write",
         issuedAt: new Date(Date.now() - 600_000).toISOString(),
         expiresAt: new Date(Date.now() - 1).toISOString(),
       };
@@ -135,13 +138,37 @@ describe("BoundaryEnforcer", () => {
     });
 
     it("exclusive mode allows protected credentials with valid capability", () => {
-      const enforcer = new BoundaryEnforcer("exclusive", registry, true);
-      const cap: BoundaryCapability = {
-        resource: "production-database", operation: "execute", planDigest: "x", riskLevel: "write",
+      const approvalRegistry = new ApprovalRegistry();
+      approvalRegistry.approve("p-1", "x", process.cwd(), { domain: "database", risk: "write" });
+      const enforcer = new BoundaryEnforcer("exclusive", registry, true, approvalRegistry);
+      const cap = mintCapability({
+        resource: "production-database",
+        operation: "execute",
+        planId: "p-1",
+        planDigest: "x",
+        riskLevel: "write",
+      });
+      expect(enforcer.checkCredentialAccess({ credentialName: "DATABASE_URL", caller: "DB", capability: cap }).allowed).toBe(true);
+    });
+
+    it("validateCapability rejects manually constructed capability without planId", () => {
+      const approvalRegistry = new ApprovalRegistry("/tmp/test");
+      const cap = {
+        resource: "production-database",
+        operation: "execute",
+        planId: "",
+        planDigest: "x",
+        riskLevel: "write",
         issuedAt: new Date().toISOString(),
         expiresAt: new Date(Date.now() + 300_000).toISOString(),
-      };
-      expect(enforcer.checkCredentialAccess({ credentialName: "DATABASE_URL", caller: "DB", capability: cap }).allowed).toBe(true);
+      } as BoundaryCapability;
+      const result = validateCapability(
+        cap, "production-database", "p-1", "x",
+        approvalRegistry, "/tmp/test", "database",
+        "execute", "write",
+      );
+      expect(result.valid).toBe(false);
+      expect(result.reason).toContain("plan id");
     });
   });
 });

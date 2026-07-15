@@ -4,6 +4,7 @@ import { ProtectedResourceRegistry, createDatabaseResource, createVercelResource
 import { CredentialVault } from "../../../src/boundary/vault.js";
 import { BoundaryEnforcer } from "../../../src/boundary/enforcement.js";
 import { mintCapability } from "../../../src/boundary/capability.js";
+import { ApprovalRegistry } from "../../../src/core/approval.js";
 import type { CredentialSource } from "../../../src/deployment/credentials.js";
 
 function mockSource(vars: Record<string, string | undefined>): CredentialSource {
@@ -16,7 +17,8 @@ describe("full boundary integration", () => {
     const resources = new ProtectedResourceRegistry();
     resources.register(createDatabaseResource());
     const enforcer = new BoundaryEnforcer(config.mode, resources, true);
-    const vault = new CredentialVault(mockSource({ DATABASE_URL: "postgres://secret@host/db" }), resources, config.mode);
+    const approvalRegistry = new ApprovalRegistry();
+    const vault = new CredentialVault(mockSource({ DATABASE_URL: "postgres://secret@host/db" }), resources, config.mode, approvalRegistry);
 
     // Bash tool: blocked from seeing DATABASE_URL
     const bashCheck = enforcer.checkToolCall({ toolName: "bash", input: { command: "psql $DATABASE_URL" } });
@@ -26,7 +28,7 @@ describe("full boundary integration", () => {
     const directAccess = vault.get("DATABASE_URL");
     expect(directAccess).toBeUndefined();
 
-    // DB tool with valid capability: allowed
+    // Mint capability and approve the plan so vault validateCapability passes
     const cap = mintCapability({
       resource: "production-database",
       operation: "execute",
@@ -34,8 +36,22 @@ describe("full boundary integration", () => {
       planDigest: "abc123",
       riskLevel: "write",
     });
+    approvalRegistry.approve("plan-abc-123", "abc123", process.cwd(), { domain: "database", risk: "write" });
+
+    // DB tool with valid capability: allowed
     const dbAccess = vault.get("DATABASE_URL", cap);
     expect(dbAccess).toBe("postgres://secret@host/db");
+
+    // Unapproved capability: rejected
+    const unapprovedCap = mintCapability({
+      resource: "production-database",
+      operation: "execute",
+      planId: "unapproved-plan",
+      planDigest: "def456",
+      riskLevel: "write",
+    });
+    const rejectedAccess = vault.get("DATABASE_URL", unapprovedCap);
+    expect(rejectedAccess).toBeUndefined();
 
     // DB tool call itself: always allowed
     const dbCheck = enforcer.checkToolCall({ toolName: "DB", input: { action: "inspect" } });
@@ -99,6 +115,6 @@ describe("full boundary integration", () => {
     const resources = new ProtectedResourceRegistry();
     resources.register(createDatabaseResource());
     const enforcer = new BoundaryEnforcer("exclusive", resources, false);
-    expect(() => enforcer.validateStartup()).toThrow("requires an active boundary");
+    expect(() => enforcer.validateStartup()).toThrow("requires an active boundary (install pi-permission-system)");
   });
 });

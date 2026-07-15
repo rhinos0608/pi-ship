@@ -13,6 +13,6 @@ describe("boundary types", () => {
 
   it("BoundaryCapability has all required fields", () => {
     type Keys = keyof BoundaryCapability;
-    expectTypeOf<Keys>().toEqualTypeOf<"resource" | "operation" | "planDigest" | "riskLevel" | "issuedAt" | "expiresAt">();
+    expectTypeOf<Keys>().toEqualTypeOf<"resource" | "operation" | "planId" | "planDigest" | "riskLevel" | "issuedAt" | "expiresAt">();
   });
 });

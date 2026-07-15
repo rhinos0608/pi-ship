@@ -20,15 +20,9 @@ export default async function piShipExtension(pi: ExtensionAPI): Promise<void> {
   const credentialSource = environmentSource();
 
   // Register boundary (null if managed mode or no manifest).
-  // On misconfiguration, emit diagnostic and fall back to raw credential source
-  // so gate, ship, DB, and provider registrations still complete.
-  let boundary: Awaited<ReturnType<typeof registerBoundary>>;
-  try {
-    boundary = await registerBoundary(pi, process.cwd(), credentialSource, approvalRegistry);
-  } catch (e: unknown) {
-    console.error("pi-ship: boundary registration failed, continuing without boundary:", e);
-    boundary = null;
-  }
+  // On misconfiguration, let errors propagate so initialization aborts
+  // instead of falling back to raw credentials (fail closed).
+  const boundary = await registerBoundary(pi, process.cwd(), credentialSource, approvalRegistry);
   const effectiveSource = boundary?.vault.asCredentialSource() ?? credentialSource;
 
   registerGate(pi, approvalRegistry);

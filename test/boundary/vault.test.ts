@@ -29,12 +29,12 @@ describe("CredentialVault", () => {
   });
 
   it("exclusive mode returns undefined without capability", () => {
-    const vault = new CredentialVault(mockSource({ DATABASE_URL: "postgres://..." }), registry, "exclusive");
+    const vault = new CredentialVault(mockSource({ DATABASE_URL: "postgres://..." }), registry, "exclusive", new ApprovalRegistry());
     expect(vault.get("DATABASE_URL")).toBeUndefined();
   });
 
   it("exclusive mode returns undefined with expired capability", () => {
-    const vault = new CredentialVault(mockSource({ DATABASE_URL: "postgres://..." }), registry, "exclusive");
+    const vault = new CredentialVault(mockSource({ DATABASE_URL: "postgres://..." }), registry, "exclusive", new ApprovalRegistry());
     const expired: BoundaryCapability = {
       resource: "production-database",
       operation: "execute",
@@ -48,7 +48,9 @@ describe("CredentialVault", () => {
   });
 
   it("exclusive mode returns credential with valid capability", () => {
-    const vault = new CredentialVault(mockSource({ DATABASE_URL: "postgres://..." }), registry, "exclusive");
+    const approvalRegistry = new ApprovalRegistry();
+    approvalRegistry.approve("plan-abc", "abc", process.cwd(), { domain: "database", risk: "write" });
+    const vault = new CredentialVault(mockSource({ DATABASE_URL: "postgres://..." }), registry, "exclusive", approvalRegistry);
     const cap: BoundaryCapability = {
       resource: "production-database",
       operation: "execute",
@@ -62,7 +64,7 @@ describe("CredentialVault", () => {
   });
 
   it("unprotected credentials always accessible", () => {
-    const vault = new CredentialVault(mockSource({ HOME: "/home/user" }), registry, "exclusive");
+    const vault = new CredentialVault(mockSource({ HOME: "/home/user" }), registry, "exclusive", new ApprovalRegistry());
     expect(vault.get("HOME")).toBe("/home/user");
   });
 
@@ -119,25 +121,15 @@ describe("CredentialVault", () => {
     expect(vault.get("DATABASE_URL", cap)).toBeUndefined();
   });
 
-  it("exclusive mode returns credential without approvalRegistry (backward compat)", () => {
-    const approver = new ApprovalRegistry();
-    approver.approve("plan-abc", "digest-1", process.cwd(), { domain: "database", risk: "write" });
-    // vault not given approvalRegistry — no full validation
-    const vault = new CredentialVault(mockSource({ DATABASE_URL: "postgres://nocheck..." }), registry, "exclusive");
-    const cap: BoundaryCapability = {
-      resource: "production-database",
-      operation: "execute",
-      planId: "plan-unused",
-      planDigest: "digest-unused",
-      riskLevel: "write",
-      issuedAt: new Date().toISOString(),
-      expiresAt: new Date(Date.now() + 300_000).toISOString(),
-    };
-    expect(vault.get("DATABASE_URL", cap)).toBe("postgres://nocheck...");
+  it("exclusive mode throws when approvalRegistry is absent", () => {
+    expect(() => new CredentialVault(mockSource({ DATABASE_URL: "postgres://..." }), registry, "exclusive"))
+      .toThrow("approvalRegistry required in exclusive mode");
   });
 
   it("runWithCapability makes capability available to get() without explicit arg", () => {
-    const vault = new CredentialVault(mockSource({ DATABASE_URL: "postgres://..." }), registry, "exclusive");
+    const approvalRegistry = new ApprovalRegistry();
+    approvalRegistry.approve("plan-abc", "abc", process.cwd(), { domain: "database", risk: "write" });
+    const vault = new CredentialVault(mockSource({ DATABASE_URL: "postgres://..." }), registry, "exclusive", approvalRegistry);
     const cap: BoundaryCapability = {
       resource: "production-database",
       operation: "execute",
@@ -155,7 +147,7 @@ describe("CredentialVault", () => {
   });
 
   it("runTrusted allows protected credential access in exclusive mode without capability", () => {
-    const vault = new CredentialVault(mockSource({ DATABASE_URL: "postgres://..." }), registry, "exclusive");
+    const vault = new CredentialVault(mockSource({ DATABASE_URL: "postgres://..." }), registry, "exclusive", new ApprovalRegistry());
     let result: string | undefined;
     vault.runTrusted(() => {
       result = vault.get("DATABASE_URL");
@@ -164,9 +156,12 @@ describe("CredentialVault", () => {
   });
 
   it("nested runWithCapability — inner overrides outer", () => {
-    const vault = new CredentialVault(mockSource({ DATABASE_URL: "postgres://..." }), registry, "exclusive");
+    const approvalRegistry = new ApprovalRegistry();
+    approvalRegistry.approve("outer", "o", process.cwd(), { domain: "database", risk: "write" });
+    approvalRegistry.approve("inner", "i", process.cwd(), { domain: "database", risk: "write" });
+    const vault = new CredentialVault(mockSource({ DATABASE_URL: "postgres://..." }), registry, "exclusive", approvalRegistry);
     const outerCap: BoundaryCapability = {
-      resource: "outer-resource",
+      resource: "production-database",
       operation: "read",
       planId: "outer",
       planDigest: "o",
@@ -175,7 +170,7 @@ describe("CredentialVault", () => {
       expiresAt: new Date(Date.now() + 300_000).toISOString(),
     };
     const innerCap: BoundaryCapability = {
-      resource: "inner-resource",
+      resource: "production-database",
       operation: "write",
       planId: "inner",
       planDigest: "i",
@@ -196,7 +191,9 @@ describe("CredentialVault", () => {
   });
 
   it("capability cleared after runWithCapability completes (no leak)", () => {
-    const vault = new CredentialVault(mockSource({ DATABASE_URL: "postgres://..." }), registry, "exclusive");
+    const approvalRegistry = new ApprovalRegistry();
+    approvalRegistry.approve("plan-abc", "abc", process.cwd(), { domain: "database", risk: "write" });
+    const vault = new CredentialVault(mockSource({ DATABASE_URL: "postgres://..." }), registry, "exclusive", approvalRegistry);
     const cap: BoundaryCapability = {
       resource: "production-database",
       operation: "execute",
@@ -214,7 +211,7 @@ describe("CredentialVault", () => {
   });
 
   it("trusted cleared after runTrusted completes (no leak)", () => {
-    const vault = new CredentialVault(mockSource({ DATABASE_URL: "postgres://..." }), registry, "exclusive");
+    const vault = new CredentialVault(mockSource({ DATABASE_URL: "postgres://..." }), registry, "exclusive", new ApprovalRegistry());
     vault.runTrusted(() => {
       vault.get("DATABASE_URL"); // inside — works
     });
@@ -223,7 +220,7 @@ describe("CredentialVault", () => {
   });
 
   it("runTrusted + expired explicit capability — still blocked", () => {
-    const vault = new CredentialVault(mockSource({ DATABASE_URL: "postgres://..." }), registry, "exclusive");
+    const vault = new CredentialVault(mockSource({ DATABASE_URL: "postgres://..." }), registry, "exclusive", new ApprovalRegistry());
     const expired: BoundaryCapability = {
       resource: "production-database",
       operation: "execute",
@@ -281,7 +278,7 @@ describe("CredentialVault", () => {
   });
 
   it("asCredentialSource returns a CredentialSource routing through vault", () => {
-    const vault = new CredentialVault(mockSource({ DATABASE_URL: "postgres://...", HOME: "/home/user", VERCEL_TOKEN: "vctok" }), registry, "exclusive");
+    const vault = new CredentialVault(mockSource({ DATABASE_URL: "postgres://...", HOME: "/home/user", VERCEL_TOKEN: "vctok" }), registry, "exclusive", new ApprovalRegistry());
     const source = vault.asCredentialSource();
     // Without capability, protected credential returns undefined through vault source
     expect(source.get("DATABASE_URL")).toBeUndefined();
@@ -292,7 +289,9 @@ describe("CredentialVault", () => {
   });
 
   it("exclusive mode protects deployment credentials registered via additional resource", () => {
-    const vault = new CredentialVault(mockSource({ VERCEL_TOKEN: "my-token" }), registry, "exclusive");
+    const approvalRegistry = new ApprovalRegistry();
+    approvalRegistry.approve("plan-abc", "abc", process.cwd(), { domain: "deployment", risk: "write" });
+    const vault = new CredentialVault(mockSource({ VERCEL_TOKEN: "my-token" }), registry, "exclusive", approvalRegistry);
     // Without capability, deployment credential is protected
     expect(vault.get("VERCEL_TOKEN")).toBeUndefined();
 

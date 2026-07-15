@@ -1,7 +1,11 @@
-export type { SecurityMode, ProtectedResourceDescriptor, ResourceType, BoundaryCapability, BoundaryConfig, BoundaryEnforcementResult } from "./types.js";
+export type { SecurityMode, ProtectedResourceDescriptor, ResourceType, BoundaryCapability, BoundaryConfig, BoundaryEnforcementResult, SignedCapability } from "./types.js";
 export { loadBoundaryConfig, parseSecurityMode, DEFAULT_BOUNDARY_CONFIG } from "./config.js";
 export { createDatabaseResource, createDeploymentResource, createVercelResource, createRailwayResource, createCloudflareResource, createNeonControlPlaneResource, ProtectedResourceRegistry } from "./resource.js";
 export { CredentialVault } from "./vault.js";
-export { mintCapability, validateCapability } from "./capability.js";
+export { mintCapability, validateCapability, mintSignedCapability, verifySignedCapability } from "./capability.js";
 export { BoundaryEnforcer } from "./enforcement.js";
 export type { ToolCallContext, CredentialAccessContext } from "./enforcement.js";
+export { detectPermissionSystem } from "./integration/permission-system.js";
+export type { PermissionSystemDetection } from "./integration/permission-system.js";
+export { generateKeyPair, signCapability, verifyCapability, exportPublicKey, importPublicKey } from "./crypto.js";
+export { EphemeralKeyStore } from "./key-store.js";
