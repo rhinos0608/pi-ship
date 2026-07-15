@@ -29,7 +29,25 @@ export async function loadRegisteredState(
     throw err("E_CONFIG_INVALID", "ambiguous state contract matched multiple provider packages");
   }
   const owner = owners[0];
-  if (!owner) throw err("E_CONFIG_INVALID", "state.json has invalid shape");
+  if (owner && owner.id !== expected.id) {
+    throw err("E_STATE_CONFLICT", expected.conflictMessage.loadStateFromOther);
+  }
+  if (!owner) {
+    // Try to detect provider from raw state to give a better error
+    if (state && typeof state === "object" && "provider" in state) {
+      const rawProvider = (state as Record<string, unknown>).provider;
+      if (typeof rawProvider === "string" && rawProvider !== expected.id) {
+        throw err("E_STATE_CONFLICT", expected.conflictMessage.loadStateFromOther);
+      }
+    }
+    // Fallback: probe all packages for the state
+    for (const pkg of packages) {
+      if (pkg.id !== expected.id && pkg.isState(state)) {
+        throw err("E_STATE_CONFLICT", expected.conflictMessage.loadStateFromOther);
+      }
+    }
+    throw err("E_CONFIG_INVALID", "state.json has invalid shape");
+  }
   if (owner.id !== expected.id) {
     throw err("E_STATE_CONFLICT", expected.conflictMessage.loadStateFromOther);
   }
@@ -52,7 +70,25 @@ export async function saveRegisteredState(
       throw err("E_CONFIG_INVALID", "ambiguous state contract matched multiple provider packages");
     }
     const owner = owners[0];
-    if (!owner) throw err("E_CONFIG_INVALID", "state.json has invalid shape");
+    if (owner && owner.id !== expected.id) {
+      throw err("E_STATE_CONFLICT", expected.conflictMessage.saveStateOverOther);
+    }
+    if (!owner) {
+      // Try to detect provider from raw state to give a better error
+      if (existing && typeof existing === "object" && "provider" in existing) {
+        const rawProvider = (existing as Record<string, unknown>).provider;
+        if (typeof rawProvider === "string" && rawProvider !== expected.id) {
+          throw err("E_STATE_CONFLICT", expected.conflictMessage.saveStateOverOther);
+        }
+      }
+      // Fallback: probe all packages for the state
+      for (const pkg of packages) {
+        if (pkg.id !== expected.id && pkg.isState(existing)) {
+          throw err("E_STATE_CONFLICT", expected.conflictMessage.saveStateOverOther);
+        }
+      }
+      throw err("E_CONFIG_INVALID", "state.json has invalid shape");
+    }
     if (owner.id !== expected.id) {
       throw err("E_STATE_CONFLICT", expected.conflictMessage.saveStateOverOther);
     }

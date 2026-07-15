@@ -91,7 +91,7 @@ describe("provider registry", () => {
 
   it("loads state with cross-provider conflict detection", async () => {
     // Railway state should be loadable
-    const railwayState = { version: 1, provider: "railway", serviceIds: {}, history: [] };
+    const railwayState = { version: 2, provider: "railway" as const, serviceIds: {}, history: [], previews: {} };
     // Mock cwd with a state file - we use a temporary dir
     const { mkdtemp, writeFile, mkdir } = await import("node:fs/promises");
     const { join } = await import("node:path");
@@ -105,7 +105,7 @@ describe("provider registry", () => {
     await wf(statePath(railCwd), JSON.stringify(railwayState));
 
     const loaded = await providerRegistry.loadState(railCwd, "railway");
-    expect(loaded).toMatchObject({ version: 1, provider: "railway" });
+    expect(loaded).toMatchObject({ version: 2, provider: "railway" });
 
     // Vercel trying to load Railway state should fail with conflict
     await expect(providerRegistry.loadState(railCwd, "vercel")).rejects.toMatchObject({
@@ -175,7 +175,7 @@ describe("provider registry", () => {
 
     const cwd = await mkdtemp(join(tmpdir(), "pi-ship-reg-test-"));
     const railState = await providerRegistry.loadState(cwd, "railway");
-    expect(railState).toMatchObject({ version: 1, provider: "railway" });
+    expect(railState).toMatchObject({ version: 2, provider: "railway" });
 
     const vercelState = await providerRegistry.loadState(cwd, "vercel");
     expect(vercelState).toMatchObject({ version: 2 });
@@ -288,7 +288,7 @@ describe("load/save state conflict exact messages", () => {
     });
 
     // Railway saving over Vercel state
-    await expect(providerRegistry.saveState(testCwd, { version: 1, provider: "railway", serviceIds: {}, history: [] }, "railway")).rejects.toMatchObject({
+    await expect(providerRegistry.saveState(testCwd, { version: 2, provider: "railway", serviceIds: {}, history: [], previews: {} }, "railway")).rejects.toMatchObject({
       code: "E_STATE_CONFLICT",
       message: "cannot overwrite V2 state with V1 state",
     });
