@@ -101,25 +101,31 @@ describe("DB tool", () => {
     expect(inspectResult.content[1].text).toContain("Inspected");
   });
 
-  it("requires environment source before every dispatch and rejects non-finite values", async () => {
-    let execute: ((...args: unknown[]) => Promise<unknown>) | undefined;
-    registerDB({ registerTool(def: { execute: (...args: unknown[]) => Promise<unknown> }) { execute = def.execute; } } as never, new ApprovalRegistry(cwd), {
-      credentialSource: { get: () => undefined },
+  it("rejects remote target without PI_SHIP_DATABASE_ENVIRONMENT and rejects non-finite values", async () => {
+    // Remote target (DATABASE_URL set) still requires environment var
+    const { execute: remoteExecute } = registered({
+      credentialSource: { get: (name) => name === "DATABASE_URL" ? "postgres://user:pass@localhost:5432/test" : undefined },
+      clientFactory: () => stubClient,
     });
-    await expect(execute!("id", { action: "inspect" }, undefined, undefined, { cwd })).rejects.toMatchObject({ code: "E_CONFIG_INVALID" });
+    await expect(remoteExecute("id", { action: "inspect" }, undefined, undefined, { cwd })).rejects.toMatchObject({ code: "E_CONFIG_INVALID" });
+    // Non-finite params should be rejected early
     const { execute: finiteExecute } = registered({ credentialSource: envWithDb, clientFactory: () => stubClient });
     await expect(finiteExecute("id", { action: "query", sql: "select $1", params: [Infinity], limit: 1 }, undefined, undefined, { cwd }))
       .rejects.toMatchObject({ code: "E_CONFIG_INVALID" });
   });
 
-  it("rejects missing DATABASE_URL with E_AUTH_MISSING", async () => {
+  it("falls back to local target when DATABASE_URL absent", async () => {
     const { execute } = registered({ credentialSource: environmentSource });
+    // inspect on fresh local DB returns empty catalog
+    const inspectResult = await execute("id", { action: "inspect" }, undefined, undefined, { cwd }) as ToolResult;
+    expect(inspectResult.content.some((c: any) => c.text.includes("local embedded database"))).toBe(true);
+    // query on local DB works (select 1)
+    const queryResult = await execute("id", { action: "query", sql: "select 1" }, undefined, undefined, { cwd }) as ToolResult;
+    expect(queryResult.content.some((c: any) => c.text.includes("local embedded database"))).toBe(true);
+    expect(queryResult.content.some((c: any) => c.text.includes("Query returned 1 row"))).toBe(true);
+    // browse on non-existent table fails with provider error
     await expect(execute("id", { action: "browse", table: "x", limit: 1, offset: 0 }, undefined, undefined, { cwd }))
-      .rejects.toMatchObject({ code: "E_AUTH_MISSING" });
-    await expect(execute("id", { action: "query", sql: "select 1" }, undefined, undefined, { cwd }))
-      .rejects.toMatchObject({ code: "E_AUTH_MISSING" });
-    await expect(execute("id", { action: "inspect" }, undefined, undefined, { cwd }))
-      .rejects.toMatchObject({ code: "E_AUTH_MISSING" });
+      .rejects.toMatchObject({ code: "E_PROVIDER" });
   });
 
   it("rejects query with invalid SQL before contacting any client", async () => {

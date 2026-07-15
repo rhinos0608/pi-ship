@@ -1,0 +1,137 @@
+[
+  "── Shared: basic reads (no params, all dialects) ──────────────────────",
+  { "dialect": ["postgres", "sqlite", "mysql"], "sql": "SELECT 1", "params": [], "expect": { "riskLevel": "read", "statementCount": 1 } },
+  { "dialect": ["postgres", "sqlite", "mysql"], "sql": "SELECT * FROM users", "params": [], "expect": { "riskLevel": "read", "statementCount": 1 } },
+  { "dialect": ["postgres", "sqlite", "mysql"], "sql": "SELECT id, name FROM users ORDER BY id", "params": [], "expect": { "riskLevel": "read", "statementCount": 1 } },
+  { "dialect": ["postgres", "sqlite", "mysql"], "sql": "SELECT count(*) FROM users", "params": [], "expect": { "riskLevel": "read", "statementCount": 1 } },
+
+  "── Shared: writes (no params, all dialects) ───────────────────────────",
+  { "dialect": ["postgres", "sqlite", "mysql"], "sql": "INSERT INTO users (name) VALUES ('test')", "params": [], "expect": { "riskLevel": "write", "statementCount": 1 } },
+  { "dialect": ["postgres", "sqlite", "mysql"], "sql": "UPDATE users SET name = 'new' WHERE id = 1", "params": [], "expect": { "riskLevel": "write", "statementCount": 1 } },
+
+  "── Shared: destructive (no params, all dialects) ──────────────────────",
+  { "dialect": ["postgres", "sqlite", "mysql"], "sql": "DELETE FROM users", "params": [], "expect": { "riskLevel": "destructive", "statementCount": 1 } },
+  { "dialect": ["postgres", "sqlite", "mysql"], "sql": "DROP TABLE users", "params": [], "expect": { "riskLevel": "destructive", "statementCount": 1 } },
+
+  "── PostgreSQL: DELETE-with-WHERE (always destructive) ────────────────",
+  { "dialect": ["postgres"], "sql": "DELETE FROM users WHERE id = 1", "params": [], "expect": { "riskLevel": "destructive", "statementCount": 1 } },
+  { "dialect": ["postgres"], "sql": "DELETE FROM users WHERE id = $1", "params": [1], "expect": { "riskLevel": "destructive", "statementCount": 1 } },
+
+  "── PostgreSQL: SELECT with $N params ─────────────────────────────────",
+  { "dialect": ["postgres"], "sql": "SELECT * FROM users WHERE id = $1", "params": [1], "expect": { "riskLevel": "read", "statementCount": 1 } },
+  { "dialect": ["postgres"], "sql": "INSERT INTO users (name) VALUES ($1)", "params": ["alice"], "expect": { "riskLevel": "write", "statementCount": 1 } },
+  { "dialect": ["postgres"], "sql": "UPDATE users SET name = $1 WHERE id = $2", "params": ["new", 1], "expect": { "riskLevel": "write", "statementCount": 1 } },
+  { "dialect": ["postgres"], "sql": "SELECT $1, $2", "params": [1, 2], "expect": { "riskLevel": "read", "statementCount": 1 } },
+  { "dialect": ["postgres"], "sql": "SELECT $1", "params": [true], "expect": { "riskLevel": "read", "statementCount": 1 } },
+
+  "── PostgreSQL: param mismatch (bind count mismatch) ──────────────────",
+  { "dialect": ["postgres"], "sql": "SELECT $1", "params": [1, 2], "expect": { "error": true } },
+  { "dialect": ["postgres"], "sql": "SELECT $1, $2", "params": [1], "expect": { "error": true } },
+
+  "── PostgreSQL: parser rejection ───────────────────────────────────────",
+  { "dialect": ["postgres"], "sql": "SEL ECT 1", "params": [], "expect": { "error": true } },
+
+  "── PostgreSQL: TRUNCATE (destructive) ────────────────────────────────",
+  { "dialect": ["postgres"], "sql": "TRUNCATE users", "params": [], "expect": { "riskLevel": "destructive", "statementCount": 1 } },
+  { "dialect": ["postgres"], "sql": "TRUNCATE users CASCADE", "params": [], "expect": { "riskLevel": "destructive", "statementCount": 1 } },
+
+  "── PostgreSQL: CREATE TABLE (additive DDL → write) ───────────────────",
+  { "dialect": ["postgres"], "sql": "CREATE TABLE users (id INT PRIMARY KEY)", "params": [], "expect": { "riskLevel": "write", "statementCount": 1 } },
+  { "dialect": ["postgres"], "sql": "CREATE VIEW active_users AS SELECT * FROM users WHERE active = true", "params": [], "expect": { "riskLevel": "write", "statementCount": 1 } },
+
+  "── PostgreSQL: multi-statement ────────────────────────────────────────",
+  { "dialect": ["postgres"], "sql": "SELECT 1; SELECT 2", "params": [], "expect": { "riskLevel": "read", "statementCount": 2 } },
+  { "dialect": ["postgres"], "sql": "SELECT 1; INSERT INTO users (name) VALUES ('test')", "params": [], "expect": { "riskLevel": "write", "statementCount": 2 } },
+  { "dialect": ["postgres"], "sql": "SELECT 1; DELETE FROM users WHERE id = $1", "params": [1], "expect": { "riskLevel": "destructive", "statementCount": 2 } },
+
+  "── PostgreSQL: blocked statements ─────────────────────────────────────",
+  { "dialect": ["postgres"], "sql": "SELECT pg_sleep(1)", "params": [], "expect": { "error": true } },
+  { "dialect": ["postgres"], "sql": "CREATE EXTENSION pgcrypto", "params": [], "expect": { "error": true } },
+  { "dialect": ["postgres"], "sql": "SHOW statement_timeout", "params": [], "expect": { "error": true } },
+
+  "── SQLite: SELECT with ? params ──────────────────────────────────────",
+  { "dialect": ["sqlite"], "sql": "SELECT ?", "params": [42], "expect": { "riskLevel": "read", "statementCount": 1 } },
+  { "dialect": ["sqlite"], "sql": "SELECT * FROM users WHERE id = ?", "params": [1], "expect": { "riskLevel": "read", "statementCount": 1 } },
+  { "dialect": ["sqlite"], "sql": "INSERT INTO users (name) VALUES (?)", "params": ["alice"], "expect": { "riskLevel": "write", "statementCount": 1 } },
+  { "dialect": ["sqlite"], "sql": "UPDATE users SET name = ? WHERE id = ?", "params": ["new", 1], "expect": { "riskLevel": "write", "statementCount": 1 } },
+  { "dialect": ["sqlite"], "sql": "SELECT ? as val", "params": [42], "expect": { "riskLevel": "read", "statementCount": 1 } },
+  { "dialect": ["sqlite"], "sql": "SELECT id, name FROM users WHERE active = ?", "params": [1], "expect": { "riskLevel": "read", "statementCount": 1 } },
+
+  "── SQLite: DELETE-with-WHERE (write, not destructive) ────────────────",
+  { "dialect": ["sqlite"], "sql": "DELETE FROM users WHERE id = ?", "params": [1], "expect": { "riskLevel": "write", "statementCount": 1 } },
+  { "dialect": ["sqlite"], "sql": "DELETE FROM users WHERE id = 1", "params": [], "expect": { "riskLevel": "write", "statementCount": 1 } },
+
+  "── SQLite: param mismatch ─────────────────────────────────────────────",
+  { "dialect": ["sqlite"], "sql": "SELECT ?", "params": [1, 2], "expect": { "error": true } },
+  { "dialect": ["sqlite"], "sql": "SELECT ?, ?", "params": [1], "expect": { "error": true } },
+
+  "── SQLite: parser rejection ──────────────────────────────────────────",
+  { "dialect": ["sqlite"], "sql": "SEL ECT 1", "params": [], "expect": { "error": true } },
+
+  "── SQLite: known-read PRAGMA ──────────────────────────────────────────",
+  { "dialect": ["sqlite"], "sql": "PRAGMA table_info('users')", "params": [], "expect": { "riskLevel": "read", "statementCount": 1 } },
+  { "dialect": ["sqlite"], "sql": "PRAGMA schema_version", "params": [], "expect": { "riskLevel": "read", "statementCount": 1 } },
+  { "dialect": ["sqlite"], "sql": "PRAGMA index_list('users')", "params": [], "expect": { "riskLevel": "read", "statementCount": 1 } },
+  { "dialect": ["sqlite"], "sql": "PRAGMA foreign_key_list('users')", "params": [], "expect": { "riskLevel": "read", "statementCount": 1 } },
+  { "dialect": ["sqlite"], "sql": "PRAGMA page_count", "params": [], "expect": { "riskLevel": "read", "statementCount": 1 } },
+  { "dialect": ["sqlite"], "sql": "PRAGMA compile_options", "params": [], "expect": { "riskLevel": "read", "statementCount": 1 } },
+  { "dialect": ["sqlite"], "sql": "PRAGMA database_list", "params": [], "expect": { "riskLevel": "read", "statementCount": 1 } },
+
+  "── SQLite: write PRAGMA (EqualsPragmaBody) ────────────────────────────",
+  { "dialect": ["sqlite"], "sql": "PRAGMA journal_mode = WAL", "params": [], "expect": { "riskLevel": "write", "statementCount": 1 } },
+  { "dialect": ["sqlite"], "sql": "PRAGMA synchronous = OFF", "params": [], "expect": { "riskLevel": "write", "statementCount": 1 } },
+
+  "── SQLite: unknown/unsafe PRAGMA (blocked) ────────────────────────────",
+  { "dialect": ["sqlite"], "sql": "PRAGMA wal_checkpoint", "params": [], "expect": { "error": true } },
+  { "dialect": ["sqlite"], "sql": "PRAGMA unknown_pragma", "params": [], "expect": { "error": true } },
+
+  "── SQLite: DROP variants (destructive) ────────────────────────────────",
+  { "dialect": ["sqlite"], "sql": "DROP TABLE users", "params": [], "expect": { "riskLevel": "destructive", "statementCount": 1 } },
+  { "dialect": ["sqlite"], "sql": "DROP INDEX idx_name", "params": [], "expect": { "riskLevel": "destructive", "statementCount": 1 } },
+  { "dialect": ["sqlite"], "sql": "DROP VIEW active_users", "params": [], "expect": { "riskLevel": "destructive", "statementCount": 1 } },
+
+  "── SQLite: CREATE variants (destructive per classifier) ───────────────",
+  { "dialect": ["sqlite"], "sql": "CREATE TABLE users (id INT)", "params": [], "expect": { "riskLevel": "destructive", "statementCount": 1 } },
+  { "dialect": ["sqlite"], "sql": "CREATE INDEX idx_name ON users (name)", "params": [], "expect": { "riskLevel": "destructive", "statementCount": 1 } },
+  { "dialect": ["sqlite"], "sql": "CREATE VIEW active_users AS SELECT * FROM users WHERE active = 1", "params": [], "expect": { "riskLevel": "destructive", "statementCount": 1 } },
+
+  "── SQLite: multi-statement ────────────────────────────────────────────",
+  { "dialect": ["sqlite"], "sql": "SELECT 1; SELECT 2", "params": [], "expect": { "riskLevel": "read", "statementCount": 2 } },
+  { "dialect": ["sqlite"], "sql": "SELECT 1; INSERT INTO users (name) VALUES ('test')", "params": [], "expect": { "riskLevel": "write", "statementCount": 2 } },
+
+  "── SQLite: blocked statements ─────────────────────────────────────────",
+  { "dialect": ["sqlite"], "sql": "ALTER TABLE users ADD COLUMN age INT", "params": [], "expect": { "riskLevel": "destructive", "statementCount": 1 } },
+
+  "── MySQL: SELECT with ? params ────────────────────────────────────────",
+  { "dialect": ["mysql"], "sql": "SELECT ?", "params": [42], "expect": { "riskLevel": "read", "statementCount": 1 } },
+  { "dialect": ["mysql"], "sql": "SELECT * FROM users WHERE id = ?", "params": [1], "expect": { "riskLevel": "read", "statementCount": 1 } },
+  { "dialect": ["mysql"], "sql": "INSERT INTO users (name) VALUES (?)", "params": ["alice"], "expect": { "riskLevel": "write", "statementCount": 1 } },
+  { "dialect": ["mysql"], "sql": "UPDATE users SET name = ? WHERE id = ?", "params": ["new", 1], "expect": { "riskLevel": "write", "statementCount": 1 } },
+  { "dialect": ["mysql"], "sql": "SELECT id, name FROM users WHERE id = ?", "params": [1], "expect": { "riskLevel": "read", "statementCount": 1 } },
+
+  "── MySQL: DELETE-with-WHERE (write) ───────────────────────────────────",
+  { "dialect": ["mysql"], "sql": "DELETE FROM users WHERE id = ?", "params": [1], "expect": { "riskLevel": "write", "statementCount": 1 } },
+  { "dialect": ["mysql"], "sql": "DELETE FROM users WHERE id = 1", "params": [], "expect": { "riskLevel": "write", "statementCount": 1 } },
+
+  "── MySQL: destructive (no WHERE) ─────────────────────────────────────",
+  { "dialect": ["mysql"], "sql": "DELETE FROM users", "params": [], "expect": { "riskLevel": "destructive", "statementCount": 1 } },
+  { "dialect": ["mysql"], "sql": "DROP TABLE users", "params": [], "expect": { "riskLevel": "destructive", "statementCount": 1 } },
+  { "dialect": ["mysql"], "sql": "TRUNCATE users", "params": [], "expect": { "riskLevel": "destructive", "statementCount": 1 } },
+  { "dialect": ["mysql"], "sql": "CREATE TABLE users (id INT)", "params": [], "expect": { "riskLevel": "destructive", "statementCount": 1 } },
+
+  "── MySQL: param mismatch ─────────────────────────────────────────────",
+  { "dialect": ["mysql"], "sql": "SELECT ?", "params": [1, 2], "expect": { "error": true } },
+  { "dialect": ["mysql"], "sql": "SELECT ?, ?", "params": [1], "expect": { "error": true } },
+
+  "── MySQL: parser rejection ────────────────────────────────────────────",
+  { "dialect": ["mysql"], "sql": "SEL ECT 1", "params": [], "expect": { "error": true } },
+
+  "── MySQL: blocked statements ──────────────────────────────────────────",
+  { "dialect": ["mysql"], "sql": "SHOW TABLES", "params": [], "expect": { "error": true } },
+  { "dialect": ["mysql"], "sql": "SET NAMES utf8", "params": [], "expect": { "error": true } },
+
+  "── MySQL: multi-statement ─────────────────────────────────────────────",
+  { "dialect": ["mysql"], "sql": "SELECT 1; SELECT 2", "params": [], "expect": { "riskLevel": "read", "statementCount": 2 } },
+  { "dialect": ["mysql"], "sql": "SELECT 1; INSERT INTO users (name) VALUES ('test')", "params": [], "expect": { "riskLevel": "write", "statementCount": 2 } },
+  { "dialect": ["mysql"], "sql": "SELECT ?; INSERT INTO items (name) VALUES (?)", "params": [1, "hello"], "expect": { "riskLevel": "write", "statementCount": 2 } }
+]

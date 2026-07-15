@@ -8,6 +8,7 @@ describe("createDatabaseResource", () => {
     expect(r.credentialNames).toContain("DATABASE_URL");
     expect(r.allowedExecutors).toContain("DB");
     expect(r.ports).toContain(5432);
+    expect(r.ports).toContain(3306);
   });
 
   it("accepts overrides", () => {

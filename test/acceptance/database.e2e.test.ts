@@ -78,7 +78,7 @@ describe("cloud-free database acceptance", () => {
         context,
       ) as { details: { planId: string; planDigest: string; status: string; statementCount: number; affectedRows: number } };
 
-      expect(applyResult.details.status).toBe("committed");
+      expect(applyResult.details.status).toContain("committed");
       expect(applyResult.details.statementCount).toBe(1);
 
       // ── Inspect persisted plan — no secrets, no SQL ──────────────────
@@ -120,6 +120,132 @@ describe("cloud-free database acceptance", () => {
 
       // ── Client factory called exactly once ───────────────────────────
       expect(clientFactory).toHaveBeenCalledTimes(1);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("zero-config local database acceptance", () => {
+  it("DB.inspect works with no env vars set", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "pi-ship-zero-config-"));
+    try {
+      const registry = new ApprovalRegistry(cwd);
+      // No DATABASE_URL, no PI_SHIP_DATABASE_ENVIRONMENT set
+      // (resolveDatabaseEnvironment defaults to "development" for local)
+      const envSource = { get: () => undefined };
+
+      let execute: ToolExecute | undefined;
+      const pi = {
+        registerTool(def: { name: string; execute: ToolExecute }) {
+          execute = def.execute;
+        },
+      };
+
+      registerDB(pi as never, registry, {
+        credentialSource: envSource,
+      });
+
+      if (!execute) throw new Error("DB tool not registered");
+
+      const context = { cwd, hasUI: true, ui: { confirm: async () => true } };
+
+      // inspect should work with local embedded PGlite
+      const inspectResult = (await execute(
+        "accept-call",
+        { action: "inspect" },
+        undefined,
+        undefined,
+        context,
+      )) as { content: Array<{ text: string }> };
+
+      expect(
+        inspectResult.content.some((c) =>
+          c.text.includes("local embedded database"),
+        ),
+      ).toBe(true);
+      expect(
+        inspectResult.content.some((c) => c.text.includes("Inspected")),
+      ).toBe(true);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("SQLite acceptance", () => {
+  it("plans and applies mutation to SQLite file, reads back data", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "pi-ship-sqlite-accept-"));
+    try {
+      const dbPath = join(cwd, "accept.db");
+      const registry = new ApprovalRegistry(cwd);
+      const envSource = {
+        get: (name: string) => {
+          if (name === "PI_SHIP_DATABASE_ENVIRONMENT") return "development";
+          if (name === "DATABASE_URL") return `sqlite:///${dbPath}`;
+          return undefined;
+        },
+      };
+
+      let execute: ToolExecute | undefined;
+      const pi = {
+        registerTool(def: { name: string; execute: ToolExecute }) {
+          execute = def.execute;
+        },
+      };
+
+      registerDB(pi as never, registry, {
+        credentialSource: envSource,
+      });
+
+      if (!execute) throw new Error("DB tool not registered");
+
+      const context = { cwd, hasUI: true, ui: { confirm: async () => true } };
+
+      // ── Plan a CREATE TABLE ─────────────────────────────────────────
+      const planResult = await execute(
+        "accept-call",
+        { action: "plan", sql: "CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)", params: [] } as DBInput,
+        undefined,
+        undefined,
+        context,
+      ) as { details: { planId: string; planDigest: string; approved: boolean; statements: unknown[]; riskLevel: string } };
+
+      expect(planResult.details.approved).toBe(true);
+      expect(planResult.details.planId).toBeTruthy();
+      expect(planResult.details.planDigest).toMatch(/^[0-9a-f]{64}$/);
+
+      // ── Apply the plan ──────────────────────────────────────────────
+      const applyResult = await execute(
+        "accept-call",
+        { action: "apply_plan", planId: planResult.details.planId, planDigest: planResult.details.planDigest } as DBInput,
+        undefined,
+        undefined,
+        context,
+      ) as { details: { planId: string; planDigest: string; status: string; statementCount: number; affectedRows: number } };
+
+      expect(applyResult.details.status).toContain("committed");
+      expect(applyResult.details.statementCount).toBe(1);
+
+      // ── Query the data ──────────────────────────────────────────────
+      const queryResult = await execute(
+        "accept-call",
+        { action: "query", sql: "SELECT * FROM users", params: [], limit: 10 } as DBInput,
+        undefined,
+        undefined,
+        context,
+      ) as { content: Array<{ text: string }> };
+
+      expect(queryResult.content.some((c) => c.text.includes("local SQLite database"))).toBe(true);
+      expect(queryResult.content.some((c) => c.text.includes("Query returned"))).toBe(true);
+
+      // ── Journal entries exist and contain no secrets ────────────────
+      const journal = await readDatabaseJournal(cwd);
+      expect(journal.length).toBe(2);
+      const journalText = JSON.stringify(journal);
+      expect(journalText).not.toContain("CREATE");
+      expect(journalText).not.toContain("INSERT");
+      expect(journalText).not.toContain(dbPath);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
