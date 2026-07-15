@@ -6,8 +6,9 @@
     {
       "description": "Railway V1 manifest",
       "additionalProperties": false,
-      "required": ["name", "provider", "project", "run"],
+      "required": ["name", "provider", "project", "run", "version"],
       "properties": {
+        "$comment": { "type": "string" },
         "name": { "type": "string", "minLength": 1 },
         "provider": { "const": "railway" },
         "version": { "const": 1 },
@@ -16,12 +17,7 @@
         "build": { "$ref": "#/$defs/commandObject" },
         "checks": { "$ref": "#/$defs/checks" },
         "secrets": { "$ref": "#/$defs/secrets" },
-        "databaseAccess": {
-          "type": "object", "additionalProperties": false,
-          "properties": {
-            "mode": { "enum": ["managed", "warn", "exclusive"] }
-          }
-        },
+        "databaseAccess": { "$ref": "#/$defs/databaseAccess" },
         "db": {
           "type": "object", "additionalProperties": false,
           "properties": {
@@ -42,6 +38,7 @@
       "additionalProperties": false,
       "required": ["provider", "version", "project"],
       "properties": {
+        "$comment": { "type": "string" },
         "provider": { "const": "neon" },
         "version": { "const": 1 },
         "project": { "type": "string", "minLength": 1 },
@@ -58,12 +55,13 @@
         "compute": {
           "type": "object", "additionalProperties": false,
           "properties": {
-            "minCu": { "type": "integer", "minimum": 0 },
-            "maxCu": { "type": "integer", "minimum": 0 },
+            "minCu": { "type": "number", "minimum": 0.25 },
+            "maxCu": { "type": "number", "minimum": 0.25 },
             "suspendTimeoutSeconds": { "type": "integer", "minimum": 0 }
           }
         },
-        "migrations": { "$ref": "#/$defs/commandObject" }
+        "migrations": { "$ref": "#/$defs/commandObject" },
+        "databaseAccess": { "$ref": "#/$defs/databaseAccess" }
       }
     },
     {
@@ -71,6 +69,7 @@
       "additionalProperties": false,
       "required": ["provider", "version", "accountId", "name", "mainModule", "compatibilityDate"],
       "properties": {
+        "$comment": { "type": "string" },
         "provider": { "const": "cloudflare" },
         "version": { "const": 1 },
         "accountId": { "type": "string", "minLength": 1 },
@@ -79,7 +78,8 @@
         "compatibilityDate": { "type": "string", "minLength": 1 },
         "compatibilityFlags": { "type": "array", "items": { "type": "string", "minLength": 1 } },
         "secrets": { "$ref": "#/$defs/secrets" },
-        "source": { "type": "string" }
+        "source": { "type": "string" },
+        "databaseAccess": { "$ref": "#/$defs/databaseAccess" }
       }
     },
     {
@@ -87,6 +87,7 @@
       "additionalProperties": false,
       "required": ["version", "name", "app"],
       "properties": {
+        "$comment": { "type": "string" },
         "version": { "const": 2 },
         "name": { "type": "string", "minLength": 1 },
         "app": {
@@ -120,7 +121,8 @@
           }
         },
         "checks": { "$ref": "#/$defs/checks" },
-        "secrets": { "$ref": "#/$defs/secrets" }
+        "secrets": { "$ref": "#/$defs/secrets" },
+        "databaseAccess": { "$ref": "#/$defs/databaseAccess" }
       }
     }
   ],
@@ -128,6 +130,13 @@
     "argv": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 },
     "commandObject": { "type": "object", "additionalProperties": false, "required": ["command"], "properties": { "command": { "$ref": "#/$defs/argv" } } },
     "checks": { "type": "array", "items": { "$ref": "#/$defs/argv" }, "minItems": 1 },
-    "secrets": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 }
+    "secrets": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 },
+    "databaseAccess": {
+      "type": "object", "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {
+        "mode": { "enum": ["managed", "warn", "exclusive"] }
+      }
+    }
   }
 }

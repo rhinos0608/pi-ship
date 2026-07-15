@@ -1,4 +1,8 @@
-/** Vercel database operations are unavailable in Phase 0. */
+/**
+ * Vercel database operations — Phase 0: all actions unsupported.
+ * Phase 1: resolve manifest.database.config.urlSecretName → fetch Vercel secret
+ *          → inject as DATABASE_URL → generic path handles the rest.
+ */
 import { err } from "../../core/errors.js";
 import type { DatabaseHandler } from "../../tools/db/contracts.js";
 import { isVercelManifest } from "./manifest.js";

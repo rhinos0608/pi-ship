@@ -20,6 +20,17 @@ Pi has no built-in boundary or sandbox mechanism. Two mature third-party extensi
 
 ## Decision
 
+### External boundary extension
+
+Exclusive mode requires pi-permission-system to be installed and active. Detection uses the public runtime sentinel `globalThis.__piPermissionSystem` (documented in pi-permission-system's README). The sentinel exposes `getYoloMode`/`toggleYoloMode`/`setYoloMode` — its presence confirms the extension loaded.
+
+pi-permission-system was chosen over pi-sandbox because:
+- Public documented runtime API for detection (pi-sandbox has no equivalent readiness signal)
+- Compatible Pi peer dependency range (^0.80.0 vs pi-sandbox's ^0.74.0)
+- Complementary policy layer: pi-permission-system gates tools/bash/MCP/skills; pi-ship gates credential vault
+
+Integration is shallow feature detection only — pi-ship never imports pi-permission-system as a dependency. Missing/disabled extension causes exclusive mode to fail closed at startup with: "exclusive databaseAccess mode requires an active boundary (install pi-permission-system); none detected".
+
 ### Three-tier security mode
 
 A `databaseAccess.mode` field in `pi-ship.json` controls enforcement:
@@ -107,7 +118,7 @@ Capabilities are not signed (in-memory only) — this is acceptable because pi-s
 
 ### Startup validation
 
-Exclusive mode calls `validateStartup()` which throws `E_CONFIG_INVALID` if no compatible boundary extension is detected. Internal boundary (vault + enforcer + capability + approval) is active. External boundary extension detection is deferred.
+Exclusive mode calls `validateStartup()` which throws `E_CONFIG_INVALID` if pi-permission-system is not detected. Detection uses structural feature probing via `src/boundary/integration/permission-system.ts`. Internal boundary (vault + enforcer + capability + approval) is always active when warn/exclusive mode is configured; the external check gates exclusive mode specifically.
 
 ### Integration wiring
 
@@ -152,21 +163,22 @@ Ship tool already accepts `credentialSource` in deps but it was not being passed
 
 - Credential isolation is enforced at the vault level, not by pattern-matching shell commands
 - Three clearly named trust levels with distinct security guarantees
-- Exclusive mode fails closed — cannot be accidentally activated without boundary extension
+- Exclusive mode fails closed — requires pi-permission-system to be installed; cannot be accidentally activated without external boundary
 - `ProtectedResourceDescriptor` covers database credentials, deployment provider tokens (Vercel, Railway, Cloudflare), and Neon control plane API key
 - Existing approval flow unchanged in managed mode — zero behavioral change for default users
 - Ship tool now also receives vault-backed credentials (previously bypassed)
+- External boundary detection is shallow structural probing — no dependency on pi-permission-system internals
 
 ### Negative
 
-- Exclusive mode is functional with the internal boundary (vault + enforcer + capability + approval); a future external boundary extension could strengthen isolation further
+- Exclusive mode requires pi-permission-system to be installed and active — adds a runtime prerequisite
 - Substring match on serialized JSON for credential detection in tool calls — false positives possible with short credential names (low risk: default protected credential is `DATABASE_URL`, specific enough)
 - `piExec` lacks env override support, so Neon migration engine still mutates `process.env.DATABASE_URL` — the vault blocks other tools from reading it, but the process-level mutation remains
 - Capabilities are in-memory objects, not cryptographically signed — sufficient for single-process but not for cross-boundary enforcement
 
 ### Security
 
-- `DATABASE_URL` no longer ambient to shell commands in exclusive mode
+- Tool-call inspection blocks non-protected tools from referencing `DATABASE_URL` in exclusive mode
 - Capabilities are plan-digest-bound and time-limited (5-minute default TTL)
 - Protected credential names never appear in error messages (existing `redact.ts` handles this)
 - `E_CONFIG_INVALID` for invalid mode values propagates to user (no silent degradation)
@@ -176,7 +188,7 @@ Ship tool already accepts `credentialSource` in deps but it was not being passed
 
 - No migration needed — `databaseAccess` is optional in `pi-ship.json`
 - Default behavior (managed mode) is identical to pre-boundary behavior
-- Existing test suite unaffected — 81 new boundary tests, zero regressions
+- Existing test suite unaffected — 89 new boundary tests, zero regressions
 
 ### Known Limitations
 
@@ -194,11 +206,13 @@ Neon's migration engine temporarily sets `process.env.DATABASE_URL` before spawn
 
 ## Verification
 
-- `npx vitest --run test/boundary/` — 81 boundary tests pass (types, config, resource, vault, capability, enforcement, barrel, integration, full integration)
-- `npx vitest --run` — full suite passes (pre-existing cloudflare/railway failures unrelated)
-- `npx tsc --noEmit` — zero new type errors (pre-existing railway state type error unrelated)
-- Exclusive mode throws `E_CONFIG_INVALID` at startup when `isBoundaryActive` is `false`
+- `npx vitest --run test/boundary/` — 89 boundary tests pass (types, config, resource, vault, capability, enforcement, barrel, integration, full integration, permission-system detection)
+- `npx vitest --run` — full suite passes (68 files, 999 tests)
+- `npx tsc --noEmit` — zero new type errors
+- Exclusive mode throws `E_CONFIG_INVALID` when pi-permission-system is not detected
+- Exclusive mode succeeds when pi-permission-system sentinel is present
 - Exclusive mode blocks `vault.get("DATABASE_URL")` without capability
 - Exclusive mode allows `vault.get("DATABASE_URL")` with valid non-expired capability
 - Warn mode allows credential access but enforcer returns warning reason
 - Managed mode returns `null` from `registerBoundary` — no behavioral change
+- Permission system detector: 8 unit tests covering absent/malformed/valid sentinel states

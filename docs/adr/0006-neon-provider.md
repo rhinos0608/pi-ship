@@ -14,7 +14,7 @@ The existing codebase has two provider patterns:
 
 Neon is CRUD-oriented (projects, branches, databases) with no deployment lifecycle. The Railway adapter pattern fits better — a simple `NeonAdapter` interface wrapping the REST client, with a journal-based step-by-step engine for idempotency.
 
-Scope: Inspect, provision, migration status, preview branch, manifest-bound migration apply. Recovery (PITR restore) is deferred — provider-managed recovery point creation is retained in the client types for future use but no recovery intent or restore flow is implemented.
+Scope: Inspect, provision, migration status, preview branch, manifest-bound migration apply, and rollback via branch-restore with restore-point capture (see ADR 0008). Idempotency guidance below applies to all scoped operations.
 
 ## Decision
 
@@ -74,7 +74,7 @@ Simpler but leaks database passwords to disk. Redaction with on-demand fresh URI
 ## Consequences
 
 ### Positive
-- Journal-based idempotency prevents duplicate provisioning
+- Journal-based idempotency prevents duplicate provisioning during replayed retries
 - Async operation polling handles Neon's eventual-consistency model
 - Connection URI redaction prevents credential leaks in state files
 - Preview branches with auto-expiration prevent cost accumulation

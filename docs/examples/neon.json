@@ -11,7 +11,7 @@
     "roleName": "app_user"
   },
   "compute": {
-    "minCu": 0,
+    "minCu": 0.25,
     "maxCu": 2,
     "suspendTimeoutSeconds": 300
   },

@@ -68,7 +68,26 @@ DB.action: apply_plan, planId: "<planId>", planDigest: "<planDigest>"
 | Cloudflare Workers | Operation-engine | `"cloudflare"` | Deploy, rollback, status, logs, preview |
 | Neon | Adapter + journal | `"neon"` | Provision, migrate, preview branch, recovery point |
 
-See `docs/adr/` for architecture decisions.
+### Per-provider capability details
+
+| Capability | Cloudflare Workers | Neon | Railway | Vercel |
+|---|---|---|---|---|
+| Deploy | ✓ Workers API | N/A (DB provider) | ✓ | ✓ |
+| Rollback | ✓ Version routing | ✓ Branch restore with restore-point capture | ✓ | ✓ |
+| Status | ✓ | ✓ | ✓ | ✓ |
+| Logs | Live tail only (not historical) — Workers Tail API | Use Neon Console — no API | ✓ | ✓ |
+| Preview environments | ✓ Workers preview | ✓ Preview branches | ✓ Ephemeral environments (explicit `previewId` required) | ✓ |
+| Preview URLs | Vendor-limited — not returned by API | N/A | ✓ | ✓ |
+| Source enumeration | Vendor-limited — single-file only | N/A | ✓ (git-based) | ✓ |
+| DB inspect / browse / query | N/A | Vendor-limited — no management API; direct PostgreSQL access via `DATABASE_URL` supported | ✓ (via `DATABASE_URL`) | ✓ (via `DATABASE_URL`) |
+| Postgres provisioning | N/A | ✓ | ✓ (`templateDeployV2`) | N/A |
+| Migration plans | N/A | ✓ | ✓ | N/A |
+| Secrets / env vars | ✓ | ✓ | ✓ | ✓ |
+
+See `docs/adr/` for architecture decisions and `docs/research/provider-capability-matrix.md` for detailed vendor limitations.
+
+> **Key:** ✓ = fully supported. Detailed entry = supported with noted constraints. N/A = not applicable (provider scope mismatch).
+> Vendor limitations: Cloudflare does not return preview URLs via API; Cloudflare source enumeration is single-file only; Neon has no log API — use Neon Console; Neon DB inspection has no programmatic API.
 
 ## Safety model
 
@@ -89,7 +108,7 @@ pi-ship supports three security modes for database credential isolation, configu
 |------|----------|
 | `managed` | Default. DB operations are approval-gated through pi-ship. No additional enforcement. |
 | `warn` | Same as managed, but warns when credentials appear in non-protected tool calls (bash, MCP). |
-| `exclusive` | Requires a compatible boundary extension. Credential vault blocks `DATABASE_URL` from reaching shell tools. Fails closed at startup if no boundary extension is detected. |
+| `exclusive` | Requires [pi-permission-system](https://github.com/MasuRii/pi-permission-system). Credential vault blocks `DATABASE_URL` from reaching shell tools. Fails closed at startup if pi-permission-system is not detected. |
 
 ```json
 {
@@ -101,6 +120,8 @@ pi-ship supports three security modes for database credential isolation, configu
 ```
 
 In `exclusive` mode, `DATABASE_URL` is only available to the `DB` tool. Deployment provider tokens (`VERCEL_TOKEN`, `RAILWAY_API_TOKEN`, `RAILWAY_TOKEN`, `CLOUDFLARE_API_TOKEN`, `NEON_API_KEY`) are also protected — only the `ship` tool can access them. `CLOUDFLARE_ACCOUNT_ID` is not protected (identifier, not secret). Capabilities are plan-digest-bound with a 5-minute TTL.
+
+**Prerequisite:** Exclusive mode requires [pi-permission-system](https://github.com/MasuRii/pi-permission-system) to be installed and active. Install with `pi install npm:pi-permission-system`. pi-ship detects the extension at runtime via its public API sentinel (`globalThis.__piPermissionSystem`).
 
 See `docs/adr/0007-database-access-boundary.md` and `docs/adr/0008-deployment-resource-boundary.md` for design rationale.
 
