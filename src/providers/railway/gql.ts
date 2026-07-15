@@ -28,6 +28,36 @@ export interface RailwayGqlClient {
   ): Promise<void>;
   status(serviceId: string, signal?: AbortSignal): Promise<{ status: string; url?: string }>;
   rollback(serviceId: string, deploymentId: string, signal?: AbortSignal): Promise<{ ok: boolean; releaseId?: string }>;
+
+  // Preview environment operations
+  createEnvironment(
+    projectId: string,
+    name: string,
+    ephemeral: boolean,
+    sourceEnvironmentId?: string,
+    skipInitialDeploys?: boolean,
+    signal?: AbortSignal
+  ): Promise<{ environmentId: string }>;
+  deleteEnvironment(environmentId: string, signal?: AbortSignal): Promise<void>;
+  findEnvironmentByName(projectId: string, name: string, signal?: AbortSignal): Promise<{ id: string; name?: string } | null>;
+
+  // Postgres template operations
+  getTemplate(code: string, signal?: AbortSignal): Promise<{ id: string; serializedConfig?: string } | null>;
+  deployTemplate(
+    templateId: string,
+    serializedConfig: string,
+    projectId: string,
+    environmentId: string,
+    workspaceId: string,
+    signal?: AbortSignal
+  ): Promise<{ serviceId: string }>;
+
+  // Service operations
+  deployServiceInstance(serviceId: string, environmentId: string, signal?: AbortSignal): Promise<void>;
+  getServiceInstances(environmentId: string, signal?: AbortSignal): Promise<Array<{ id: string; name?: string; serviceId?: string }>>;
+
+  // Workspace discovery
+  getWorkspaceId(projectId: string, signal?: AbortSignal): Promise<string | undefined>;
 }
 
 export function createRailwayGqlClient(
@@ -181,6 +211,135 @@ export function createRailwayGqlClient(
         { id: deploymentId }, signal
       );
       return { ok: true, releaseId: res.deploymentRollback.id };
+    },
+
+    // -- Preview environment operations --
+
+    async createEnvironment(projectId, name, ephemeral, sourceEnvironmentId, skipInitialDeploys, signal) {
+      const res = await gql<{ environmentCreate: { id: string } }>(
+        `mutation EnvironmentCreate(
+          $projectId: String!,
+          $name: String!,
+          $ephemeral: Boolean!,
+          $sourceEnvironmentId: String,
+          $skipInitialDeploys: Boolean
+        ) {
+          environmentCreate(input: {
+            projectId: $projectId,
+            name: $name,
+            ephemeral: $ephemeral,
+            sourceEnvironmentId: $sourceEnvironmentId,
+            skipInitialDeploys: $skipInitialDeploys
+          }) { id }
+        }`,
+        {
+          projectId,
+          name,
+          ephemeral,
+          sourceEnvironmentId: sourceEnvironmentId ?? null,
+          skipInitialDeploys: skipInitialDeploys ?? null,
+        },
+        signal
+      );
+      return { environmentId: res.environmentCreate.id };
+    },
+
+    async deleteEnvironment(environmentId, signal) {
+      await gql(
+        `mutation EnvironmentDelete($environmentId: String!) {
+          environmentDelete(id: $environmentId)
+        }`,
+        { environmentId },
+        signal
+      );
+    },
+
+    async findEnvironmentByName(projectId, name, signal) {
+      const res = await gql<{ project?: { environments?: Array<{ id: string; name?: string }> } }>(
+        `query FindEnvironmentByName($projectId: String!) {
+          project(id: $projectId) {
+            environments { id name }
+          }
+        }`,
+        { projectId },
+        signal
+      );
+      const env = res.project?.environments?.find((e) => e.name === name) ?? null;
+      return env ?? null;
+    },
+
+    // -- Postgres template operations --
+
+    async getTemplate(code, signal) {
+      const res = await gql<{ template?: { id: string; serializedConfig?: string } | null }>(
+        `query GetTemplate($code: String!) {
+          template(code: $code) { id serializedConfig }
+        }`,
+        { code },
+        signal
+      );
+      return res.template ?? null;
+    },
+
+    async deployTemplate(templateId, serializedConfig, projectId, environmentId, workspaceId, signal) {
+      const res = await gql<{ templateDeployV2: { id: string } }>(
+        `mutation TemplateDeployV2(
+          $templateId: String!,
+          $serializedConfig: String!,
+          $projectId: String!,
+          $environmentId: String!,
+          $workspaceId: String!
+        ) {
+          templateDeployV2(input: {
+            templateId: $templateId,
+            serializedConfig: $serializedConfig,
+            projectId: $projectId,
+            environmentId: $environmentId,
+            workspaceId: $workspaceId
+          }) { id }
+        }`,
+        { templateId, serializedConfig, projectId, environmentId, workspaceId },
+        signal
+      );
+      return { serviceId: res.templateDeployV2.id };
+    },
+
+    // -- Service operations --
+
+    async deployServiceInstance(serviceId, environmentId, signal) {
+      await gql(
+        `mutation ServiceInstanceDeployV2($serviceId: String!, $environmentId: String!) {
+          serviceInstanceDeployV2(input: { serviceId: $serviceId, environmentId: $environmentId })
+        }`,
+        { serviceId, environmentId },
+        signal
+      );
+    },
+
+    async getServiceInstances(environmentId, signal) {
+      const res = await gql<{ environment?: { serviceInstances?: Array<{ id: string; name?: string; serviceId?: string }> } }>(
+        `query GetServiceInstances($environmentId: String!) {
+          environment(id: $environmentId) {
+            serviceInstances { id name serviceId }
+          }
+        }`,
+        { environmentId },
+        signal
+      );
+      return res.environment?.serviceInstances ?? [];
+    },
+
+    // -- Workspace discovery --
+
+    async getWorkspaceId(projectId, signal) {
+      const res = await gql<{ project?: { workspaceId?: string } }>(
+        `query GetWorkspaceId($projectId: String!) {
+          project(id: $projectId) { workspaceId }
+        }`,
+        { projectId },
+        signal
+      );
+      return res.project?.workspaceId;
     },
   };
 }

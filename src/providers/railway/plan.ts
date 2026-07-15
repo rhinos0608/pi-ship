@@ -50,6 +50,7 @@ export const RailwayPlanSchema = Type.Object({
   planDigest: Type.String({ minLength: 1 }),
   createdAt: Type.String({ minLength: 1 }),
   intent: Type.Union([Type.Literal("deploy"), Type.Literal("rollback"), Type.Literal("migration")]),
+  previewId: Type.Optional(Type.String()),
   targetReleaseId: Type.Optional(Type.String()),
   targetSnapshot: Type.Optional(TargetSnapshotSchema),
 }, Strict);
@@ -75,6 +76,7 @@ export interface RailwayPlan {
   planDigest: string;
   createdAt: string;
   intent: "deploy" | "rollback" | "migration";
+  previewId?: string;
   targetReleaseId?: string;
   targetSnapshot?: {
     projectId?: string;
@@ -88,6 +90,7 @@ export interface RailwayPlan {
 
 export interface BuildRailwayPlanOptions {
   intent?: "deploy" | "rollback" | "migration";
+  previewId?: string;
   targetReleaseId?: string;
   planId?: string;
   createdAt?: string;
@@ -120,6 +123,7 @@ export async function buildRailwayPlan(
     estimatedImpact: deriveImpact(environment, resourceActions, migrationCommand),
     createdAt: options.createdAt ?? new Date().toISOString(),
     intent,
+    previewId: options.previewId,
     targetReleaseId: options.targetReleaseId,
     targetSnapshot: options.targetSnapshot,
   };

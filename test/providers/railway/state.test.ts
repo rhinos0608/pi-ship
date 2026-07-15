@@ -14,7 +14,7 @@ beforeEach(async () => {
 describe("loadRailwayState", () => {
   it("returns default when state missing", async () => {
     const s = await loadRailwayState(tmp);
-    expect(s.version).toBe(1);
+    expect(s.version).toBe(2);
     expect(s.provider).toBe("railway");
     expect(s.serviceIds).toEqual({});
     expect(s.history).toEqual([]);
@@ -22,7 +22,7 @@ describe("loadRailwayState", () => {
 
   it("round-trips values", async () => {
     const state = {
-      version: 1 as const,
+      version: 2 as const,
       provider: "railway" as const,
       projectId: "proj-123",
       serviceIds: { app: "svc-1", postgres: "svc-2" },
@@ -35,7 +35,7 @@ describe("loadRailwayState", () => {
   });
 
   it("atomic write does not leave partial state", async () => {
-    await saveRailwayState(tmp, { version: 1, provider: "railway", serviceIds: { app: "svc" }, history: [] });
+    await saveRailwayState(tmp, { version: 2, provider: "railway", serviceIds: { app: "svc" }, history: [], previews: {} });
     const content = await readFile(statePath(tmp), "utf8");
     const parsed = JSON.parse(content);
     expect(parsed.serviceIds.app).toBe("svc");

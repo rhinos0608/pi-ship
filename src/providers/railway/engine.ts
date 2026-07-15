@@ -42,7 +42,7 @@ export async function applyRailwayPlan(ctx: ApplyRailwayContext): Promise<ToolRe
     const completed = new Set(journal.filter((e) => e.status === "ok").map((e) => e.step));
     const terminal = new Set(journal.filter((e) => e.status === "ok" || e.status === "fail").map((e) => e.step));
     const dangling = journal.some((e) => e.status === "start" && !terminal.has(e.step));
-    const nonIdempotent = new Set(["deploy", "migrate", "rollback"]);
+    const nonIdempotent = new Set(["deploy", "migrate", "rollback", "deployPreview"]);
     if (dangling && journal.some((e) => e.status === "start" && !terminal.has(e.step) && nonIdempotent.has(e.step))) {
       throw err("E_STATE_CONFLICT", "journal contains incomplete non-idempotent side effect; manual reconciliation required");
     }
@@ -113,6 +113,64 @@ export async function applyRailwayPlan(ctx: ApplyRailwayContext): Promise<ToolRe
       return okResult(plan, "Migration applied.");
     }
 
+    // --- Preview environment handling ---
+    if (plan.previewId) {
+      if (!state.projectId || !state.environmentId || !state.serviceIds.app) {
+        throw err("E_PRECONDITION", "preview deployment requires project, environment, and service to be resolved first");
+      }
+      const projectId: string = state.projectId;
+      const previewEnvironmentIdBase: string = state.environmentId;
+      const appServiceId: string = state.serviceIds.app;
+      const previewId = plan.previewId;
+      const previewName = `pr-${previewId}`;
+
+      // 1. Create or reuse preview environment
+      let previewEnvironmentId!: string;
+      await step("createPreviewEnvironment", true, async () => {
+        const previewEnv = await adapter.createPreviewEnvironment(projectId, previewName, previewEnvironmentIdBase, signal);
+        previewEnvironmentId = previewEnv.environmentId;
+      });
+
+      // 2. Provision Postgres if configured
+      let postgresServiceId: string | undefined;
+      if (manifest.db?.provision === "railway-postgres") {
+        await step("previewEnsurePostgres", true, async () => {
+          const wsId = await adapter.getWorkspaceId(projectId, signal);
+          if (!wsId) throw err("E_PROVIDER", "could not discover workspaceId");
+          const pg = await adapter.ensurePostgres(projectId, previewEnvironmentId!, wsId, signal);
+          postgresServiceId = pg.serviceId;
+        });
+
+        // Link Postgres reference variable
+        await step("previewLinkPostgres", true, async () => {
+          await adapter.linkPostgresToService(projectId, previewEnvironmentId!, appServiceId, undefined, signal);
+        });
+      }
+
+      // 3. Set app secrets in preview environment
+      await step("previewSetVariables", true, async () => {
+        await adapter.setVariables(appServiceId, plan.secretNames, () => envReader(plan.secretNames), signal, previewEnvironmentId!);
+      });
+
+      // 4. Deploy to preview
+      await step("deployPreview", true, async () => {
+        await adapter.deployToPreview(appServiceId, previewEnvironmentId!, signal);
+      });
+
+      // Track preview in state
+      state.previews ??= {};
+      state.previews[previewId] = {
+        environmentId: previewEnvironmentId,
+        serviceId: appServiceId,
+        projectId: projectId,
+        postgresServiceId,
+        createdAt: new Date().toISOString(),
+      };
+      await stateStore.save(state);
+
+      return okResult(plan, `Preview ${previewName} deployed for ${manifest.name}.`);
+    }
+
     await step("ensureProject", true, async () => {
       const r = await adapter.ensureProject(manifest.project, signal);
       if (!r.projectId || !r.environmentId) throw err("E_PRECONDITION", "provider did not return bound project and environment IDs");
@@ -133,7 +191,12 @@ export async function applyRailwayPlan(ctx: ApplyRailwayContext): Promise<ToolRe
 
     if (manifest.db?.provision === "railway-postgres") {
       await step("provisionPostgres", true, async () => {
-        throw err("E_PHASE_UNSUPPORTED", "Railway Postgres auto-provision is disabled in MVP; use existing DATABASE_URL");
+        const wsId = await adapter.getWorkspaceId(state.projectId!, signal);
+        if (!wsId) throw err("E_PROVIDER", "could not discover workspaceId");
+        const r = await adapter.provisionPostgres(state.projectId!, state.environmentId!, wsId, signal);
+        if (!r.ok) throw err("E_PROVIDER", "postgres provisioning failed");
+        state.serviceIds.postgres = r.serviceId;
+        await stateStore.save(state);
       });
     }
 

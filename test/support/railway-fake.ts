@@ -36,6 +36,7 @@ export function createFakeProvider(config?: {
   const releases = new Map<string, { releaseId: string; serviceId: string; url?: string; rolledBack?: boolean }>();
   const failures: FailureInjection = { ...config?.failures };
   const calls: FakeCall[] = [];
+  const previews = new Map<string, { id: string; name: string; projectId: string }>();
 
   function maybeFail(method: keyof FailureInjection): void {
     const error = failures[method];
@@ -63,7 +64,7 @@ export function createFakeProvider(config?: {
     async checkAuth() {
       record("checkAuth", []);
       maybeFail("checkAuth");
-      return { ok: true };
+      return { ok: true, serviceId: "test-postgres-service-id" };
     },
     async ensureProject(name) {
       record("ensureProject", [name]);
@@ -122,10 +123,53 @@ export function createFakeProvider(config?: {
       rel.rolledBack = true;
       return { ok: true, releaseId: uid("rel") };
     },
-    async provisionPostgres(_projectId) {
-      record("provisionPostgres", [_projectId]);
+    async provisionPostgres(projId, envId, wsId) {
+      record("provisionPostgres", [projId, envId, wsId]);
       maybeFail("provisionPostgres");
-      throw err("E_PHASE_UNSUPPORTED", "Railway Postgres auto-provision is disabled in MVP");
+      return { ok: true, serviceId: "test-postgres-service-id" };
+    },
+
+    async createPreviewEnvironment(projId, name, srcEnvId) {
+      record("createPreviewEnvironment", [projId, name, srcEnvId]);
+      maybeFail("createPreviewEnvironment");
+      const existing = [...previews.values()].find(e => e.name === name);
+      if (existing) return { environmentId: existing.id, created: false };
+      const id = uid("penv");
+      previews.set(id, { id, name, projectId: projId });
+      return { environmentId: id, created: true };
+    },
+
+    async ensurePostgres(projId, envId, wsId) {
+      record("ensurePostgres", [projId, envId, wsId]);
+      maybeFail("ensurePostgres");
+      // Find env, check for Postgres service
+      const key = `${envId}/Postgres`;
+      const existing = services.get(key);
+      if (existing) return { serviceId: existing, created: false };
+      const id = uid("pg");
+      services.set(key, id);
+      return { serviceId: id, created: true };
+    },
+
+    async linkPostgresToService(projId, envId, svcId, pgServiceName) {
+      record("linkPostgresToService", [projId, envId, svcId, pgServiceName]);
+      maybeFail("linkPostgresToService");
+      // Store reference variable
+      const ref = `\${{${pgServiceName ?? "Postgres"}.DATABASE_URL}}`;
+      const existing = variables.get(svcId) ?? {};
+      existing.DATABASE_URL = ref;
+      variables.set(svcId, existing);
+    },
+
+    async deployToPreview(serviceId, environmentId) {
+      record("deployToPreview", [serviceId, environmentId]);
+      maybeFail("deployToPreview");
+    },
+
+    async getWorkspaceId(projId) {
+      record("getWorkspaceId", [projId]);
+      maybeFail("getWorkspaceId");
+      return `ws-${projId}`;
     },
   };
 }

@@ -35,8 +35,9 @@ export interface RollbackResult {
 }
 
 export interface PostgresResult {
+  ok: boolean;
   serviceId: string;
-  urlEnvName: "DATABASE_URL";
+  urlEnvName?: "DATABASE_URL";
 }
 
 export type VariableSource = () => Record<string, string | undefined>;
@@ -46,12 +47,19 @@ export interface ProviderAdapter {
   checkAuth(signal?: AbortSignal): Promise<{ ok: boolean; missing?: string[] }>;
   ensureProject(name: string, signal?: AbortSignal): Promise<ProjectResult>;
   ensureService(projectId: string, name: string, signal?: AbortSignal): Promise<ServiceResult>;
-  setVariables(serviceId: string, names: string[], source: VariableSource, signal?: AbortSignal): Promise<void>;
+  setVariables(serviceId: string, names: string[], source: VariableSource, signal?: AbortSignal, environmentId?: string): Promise<void>;
   deploy(serviceId: string, dir: string, signal?: AbortSignal, onUpdate?: (text: string) => void): Promise<DeployResult>;
   status(serviceId: string, signal?: AbortSignal): Promise<StatusResult>;
   logs(serviceId: string, lines: number, signal?: AbortSignal): Promise<string>;
   rollback(serviceId: string, releaseId: string, signal?: AbortSignal): Promise<RollbackResult>;
-  provisionPostgres(projectId: string, signal?: AbortSignal): Promise<PostgresResult>;
+  provisionPostgres(projectId: string, environmentId?: string, workspaceId?: string, signal?: AbortSignal): Promise<PostgresResult>;
+
+  // Preview environment operations
+  createPreviewEnvironment(projectId: string, name: string, sourceEnvironmentId?: string, signal?: AbortSignal): Promise<{ environmentId: string; created: boolean }>;
+  ensurePostgres(projectId: string, environmentId: string, workspaceId: string, signal?: AbortSignal): Promise<{ serviceId: string; created: boolean }>;
+  linkPostgresToService(projectId: string, environmentId: string, serviceId: string, postgresServiceName?: string, signal?: AbortSignal): Promise<void>;
+  deployToPreview(serviceId: string, environmentId: string, signal?: AbortSignal): Promise<void>;
+  getWorkspaceId(projectId: string, signal?: AbortSignal): Promise<string | undefined>;
 }
 
 export interface FailureInjection {
@@ -64,6 +72,13 @@ export interface FailureInjection {
   logs?: ShipError;
   rollback?: ShipError;
   provisionPostgres?: ShipError;
+  createPreviewEnvironment?: ShipError;
+  ensurePostgres?: ShipError;
+  linkPostgresToService?: ShipError;
+  deployToPreview?: ShipError;
+  getWorkspaceId?: ShipError;
+  findEnvironmentByName?: ShipError;
+  deleteEnvironment?: ShipError;
 }
 
 export interface RailwayAdapterConfig {
@@ -111,6 +126,8 @@ export function createRailwayAdapter(
     }
   }
 
+  let workspaceId: string | undefined;
+
   return {
     id: "railway",
     async checkAuth(signal) {
@@ -142,14 +159,15 @@ export function createRailwayAdapter(
       serviceId = result.serviceId;
       return result;
     },
-    async setVariables(boundServiceId, _names, source, signal) {
+    async setVariables(boundServiceId, _names, source, signal, overrideEnvId) {
       signal?.throwIfAborted();
       await requireLinkedIds();
+      const targetEnvId = overrideEnvId ?? environmentId!;
       const values: Record<string, string> = {};
       for (const [key, value] of Object.entries(source())) {
         if (value !== undefined) values[key] = value;
       }
-      await gql.setVariables(projectId!, environmentId!, boundServiceId, values, {
+      await gql.setVariables(projectId!, targetEnvId, boundServiceId, values, {
         replace: false,
         skipDeploys: true,
       }, signal);
@@ -157,6 +175,56 @@ export function createRailwayAdapter(
     async deploy(boundServiceId, dir, signal) {
       await requireLinkedIds();
       return cli.up(boundServiceId, environmentId!, projectId!, dir, signal);
+    },
+
+    async deployToPreview(serviceId, envId, signal) {
+      await gql.deployServiceInstance(serviceId, envId, signal);
+    },
+
+    async getWorkspaceId(projId, signal) {
+      if (workspaceId) return workspaceId;
+      const wid = await gql.getWorkspaceId(projId, signal);
+      if (wid) workspaceId = wid;
+      return wid;
+    },
+
+    async createPreviewEnvironment(projId, name, sourceEnvId, signal) {
+      // Idempotent: check if environment already exists
+      const existing = await gql.findEnvironmentByName(projId, name, signal);
+      if (existing) {
+        return { environmentId: existing.id, created: false };
+      }
+      const result = await gql.createEnvironment(projId, name, true, sourceEnvId, true, signal);
+      return { environmentId: result.environmentId, created: true };
+    },
+
+    async ensurePostgres(projId, envId, wsId, signal) {
+      // Idempotent: check for existing Postgres service instance
+      const instances = await gql.getServiceInstances(envId, signal);
+      const existingPg = instances.find((inst) => inst.name === "Postgres");
+      if (existingPg) {
+        return { serviceId: existingPg.serviceId ?? existingPg.id, created: false };
+      }
+      // Get postgres template
+      const template = await gql.getTemplate("postgres", signal);
+      if (!template) {
+        throw err("E_PROVIDER", "postgres template not found in Railway");
+      }
+      const result = await gql.deployTemplate(
+        template.id,
+        template.serializedConfig ?? "{}",
+        projId,
+        envId,
+        wsId,
+        signal
+      );
+      return { serviceId: result.serviceId, created: true };
+    },
+
+    async linkPostgresToService(projId, envId, svcId, pgServiceName, signal) {
+      await gql.setVariables(projId, envId, svcId, {
+        DATABASE_URL: `\${{${pgServiceName ?? "Postgres"}.DATABASE_URL}}`,
+      }, { replace: false, skipDeploys: true }, signal);
     },
     async status(boundServiceId, signal) {
       signal?.throwIfAborted();
@@ -181,9 +249,31 @@ export function createRailwayAdapter(
       const result = await gql.rollback(boundServiceId, releaseId, signal);
       return { ok: result.ok, releaseId: result.releaseId };
     },
-    async provisionPostgres(_projectId, signal) {
+    async provisionPostgres(projId, envId, wsId, signal) {
+      // Real implementation using templateDeployV2 (was MVP-stubbed)
       signal?.throwIfAborted();
-      throw err("E_PHASE_UNSUPPORTED", "Railway Postgres auto-provision is disabled in MVP; use existing DATABASE_URL");
+      if (!envId) throw err("E_PRECONDITION", "environmentId required for provisionPostgres");
+      if (!wsId) {
+        const wid = await gql.getWorkspaceId(projId, signal);
+        if (!wid) throw err("E_PROVIDER", "could not discover workspaceId");
+        wsId = wid;
+      }
+      const existing = await gql.getServiceInstances(envId, signal);
+      const existingPg = existing.find((inst) => inst.name === "Postgres");
+      if (existingPg) {
+        return { ok: true, serviceId: existingPg.serviceId ?? existingPg.id };
+      }
+      const template = await gql.getTemplate("postgres", signal);
+      if (!template) throw err("E_PROVIDER", "postgres template not found");
+      const pgResult = await gql.deployTemplate(
+        template.id,
+        template.serializedConfig ?? "{}",
+        projId,
+        envId,
+        wsId,
+        signal
+      );
+      return { ok: true, serviceId: pgResult.serviceId };
     },
   };
 }

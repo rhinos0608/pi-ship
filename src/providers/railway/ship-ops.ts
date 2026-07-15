@@ -89,8 +89,13 @@ async function planAction(
   const state = requireRailwayState(await services.loadState("railway"));
   const environment = params.environment;
   const isRollback = "intent" in params && params.intent === "rollback";
+  const isPreview = environment === "preview";
+  if (isRollback && isPreview) {
+    throw err("E_PRECONDITION", "rollback is not supported for preview environments");
+  }
   const plan = await buildRailwayPlan(cwd, manifest, environment, {
     intent: isRollback ? "rollback" : "deploy",
+    previewId: isPreview ? params.previewId : undefined,
     targetReleaseId: isRollback ? params.targetReleaseId : undefined,
     targetSnapshot: snapshot(state),
   });
@@ -203,7 +208,9 @@ export const handleRailwayShipOps: ShipHandler = async (params, context) => {
   const { cwd, pi, ctx, registry, credentialSource, signal, services } = context;
   const manifest = requireRailwayManifest(context.manifest);
   if (params.action === "plan" && params.environment === "preview") {
-    throw err("E_PHASE_UNSUPPORTED", "preview environment is not supported in MVP");
+    if (!("previewId" in params) || !params.previewId) {
+      throw err("E_PRECONDITION", "previewId is required when environment is 'preview'");
+    }
   }
   const envReader = (names: string[]) => {
     const values: Record<string, string | undefined> = {};

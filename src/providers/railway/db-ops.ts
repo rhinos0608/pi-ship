@@ -38,9 +38,7 @@ async function planMigration(
   registry: ApprovalRegistry,
   services: RegistryServices,
 ): Promise<ToolResult> {
-  if (environment === "preview") {
-    throw err("E_PHASE_UNSUPPORTED", "preview environment is not supported in MVP");
-  }
+
   if (!manifest.db?.migrate?.command) {
     throw err("E_CONFIG_INVALID", "manifest missing db.migrate.command");
   }
@@ -136,17 +134,11 @@ export const handleRailwayDatabaseOps: DatabaseHandler = async (params, context)
   };
 
   switch (params.action) {
-    case "inspect":
-      return { content: [{ type: "text", text: "Database inspection unavailable without provider query." }], details: {} };
-    case "migration_status":
-      return { content: [{ type: "text", text: "Migration status requires provider deployment metadata." }], details: {} };
-    case "browse":
-    case "query":
-    case "plan":
-      throw err("E_PHASE_UNSUPPORTED", `DB.${params.action} is unsupported in this slice`);
     case "plan_migration":
       return planMigration(cwd, manifest, environment, ctx, registry, services);
     case "apply_plan":
       return applyMigration(pi, cwd, manifest, environment, params.planId, params.planDigest, envReader, credentialSource, registry, signal, services);
+    default:
+      throw err("E_PHASE_UNSUPPORTED", `DB.${params.action} is unsupported via Railway provider`);
   }
 };

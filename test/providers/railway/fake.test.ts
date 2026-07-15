@@ -63,10 +63,10 @@ describe("createFakeProvider", () => {
     expect(r.created).toBe(false);
   });
 
-  it("provisionPostgres returns E_PHASE_UNSUPPORTED", async () => {
+  it("provisionPostgres returns ok with serviceId", async () => {
     const p = createFakeProvider();
-    await expect(p.provisionPostgres("proj-1")).rejects.toMatchObject({
-      code: "E_PHASE_UNSUPPORTED",
-    });
+    const r = await p.provisionPostgres("proj-1", "env-1", "ws-1");
+    expect(r.ok).toBe(true);
+    expect(r.serviceId).toBe("test-postgres-service-id");
   });
 });
