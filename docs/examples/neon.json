@@ -1,0 +1,21 @@
+{
+  "$comment": "Neon V1 — serverless Postgres with branch, compute scaling, and migrations",
+  "provider": "neon",
+  "version": 1,
+  "project": "my-neon-project",
+  "pgVersion": 16,
+  "regionId": "aws-us-east-1",
+  "branch": {
+    "name": "preview",
+    "databaseName": "app",
+    "roleName": "app_user"
+  },
+  "compute": {
+    "minCu": 0,
+    "maxCu": 2,
+    "suspendTimeoutSeconds": 300
+  },
+  "migrations": {
+    "command": ["npx", "prisma", "migrate", "deploy"]
+  }
+}

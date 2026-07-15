@@ -1,0 +1,23 @@
+{
+  "$comment": "Vercel V2 — app deployment with optional external database and team config",
+  "version": 2,
+  "name": "my-nextjs-app",
+  "app": {
+    "provider": "vercel",
+    "config": {
+      "projectName": "my-nextjs-project",
+      "teamId": "team_abc123",
+      "rootDirectory": "apps/web"
+    }
+  },
+  "database": {
+    "provider": "external",
+    "config": {
+      "urlSecretName": "DATABASE_URL"
+    }
+  },
+  "checks": [
+    ["curl", "-f", "https://my-nextjs-project.vercel.app/api/health"]
+  ],
+  "secrets": ["DATABASE_URL", "NEXT_PUBLIC_API_URL"]
+}

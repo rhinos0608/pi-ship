@@ -1,0 +1,27 @@
+{
+  "$comment": "Railway V1 — full-featured with build, checks, secrets, and DB migration",
+  "name": "my-api",
+  "provider": "railway",
+  "project": "my-railway-project-id",
+  "build": {
+    "command": ["npm", "run", "build"]
+  },
+  "run": {
+    "command": ["node", "dist/server.js"]
+  },
+  "checks": [
+    ["curl", "-f", "http://localhost:3000/health"]
+  ],
+  "secrets": [
+    "DATABASE_URL",
+    "API_KEY",
+    "JWT_SECRET"
+  ],
+  "db": {
+    "provision": "railway-postgres",
+    "migrate": {
+      "command": ["npx", "prisma", "migrate", "deploy"],
+      "allowProductionMigrations": false
+    }
+  }
+}
