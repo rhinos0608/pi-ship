@@ -47,4 +47,31 @@ describe("piShipExtension", () => {
       process.cwd = originalCwd;
     }
   });
+
+  it("skips ship tool and provider commands when no pi-ship.json exists", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-ship-test-"));
+    // No pi-ship.json written — simulates local mode.
+    const originalCwd = process.cwd;
+    process.cwd = () => dir;
+    try {
+    const tools: string[] = [];
+    const commands: string[] = [];
+    const pi = {
+      registerTool: (def: { name: string }) => {
+        tools.push(def.name);
+      },
+      registerCommand: (name: string) => {
+        commands.push(name);
+      },
+      on: () => {},
+    };
+    await piShipExtension(pi as unknown as never);
+
+    expect(tools).toContain("DB");
+    expect(tools).not.toContain("ship");
+    expect(commands).toEqual([]);
+    } finally {
+      process.cwd = originalCwd;
+    }
+  });
 });
