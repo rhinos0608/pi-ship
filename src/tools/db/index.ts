@@ -7,21 +7,22 @@ import { Value } from "typebox/value";
 import { ApprovalRegistry, requestPlanApproval } from "../../core/approval.js";
 import { canonicalize } from "../../core/canonicalize.js";
 import { resolveDatabaseEnvironment } from "../../database/environment.js";
-import { assertPublicPlan } from "../../database/classifier.js";
+import { assertPublicPlan, classifySQL } from "../../database/classifier.js";
 import { buildDatabasePlan, fingerprintTarget, persistDatabasePlan } from "../../database/plan.js";
 import { DatabasePayloadRegistry } from "../../database/payload.js";
-import { err } from "../../core/errors.js";
+import { err, isShipError } from "../../core/errors.js";
 import type { CredentialSource } from "../../deployment/credentials.js";
 import { providerRegistry } from "../../providers/registry.js";
 import { readPlanFile } from "../../persistence/plan-store.js";
 import { DBSchema, type DBInput } from "./schema.js";
 import type { DatabaseHandlerContext } from "./contracts.js";
-import type { DatabaseClientFactory } from "../../database/client.js";
+import type { DatabaseClient, DatabaseClientFactory } from "../../database/client.js";
 import { createDefaultClientFactory } from "../../database/client.js";
 import { executeReadQuery } from "../../database/read.js";
 import { executeBrowse } from "../../database/browse.js";
 import { inspectDatabase } from "../../database/inspect.js";
 import { applyDatabasePlan } from "../../database/apply.js";
+import { applyDialectPlan, type DialectMutationExecutor, type DialectError } from "../../database/dialect/apply.js";
 import { readDatabaseJournal } from "../../database/journal.js";
 import { resolveDatabaseTarget } from "../../database/target.js";
 import { createPGliteClient } from "../../database/local/pglite-client.js";
@@ -39,6 +40,51 @@ const hash = (value: unknown) => createHash("sha256").update(typeof value === "s
 function containsNonFiniteNumber(value: unknown): boolean { if (typeof value === "number") return !Number.isFinite(value); if (Array.isArray(value)) return value.some(containsNonFiniteNumber); if (value && typeof value === "object") return Object.values(value).some(containsNonFiniteNumber); return false; }
 
 async function contextFingerprints(cwd: string): Promise<{ providerFingerprint: string; manifestFingerprint: string }> { try { await access(join(cwd, "pi-ship.json")); } catch (e) { if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e; return { providerFingerprint: hash("none::provider"), manifestFingerprint: hash("none::manifest") }; } const { manifest, packageId } = await providerRegistry.loadManifest(cwd); return { providerFingerprint: hash(packageId), manifestFingerprint: hash(manifest) }; }
+
+const pgliteExecutor: DialectMutationExecutor = {
+  paramBinding: 'positional-prefix',
+  classifyError(cause: unknown): DialectError {
+    if (isShipError(cause)) {
+      const e = cause as { code: string; retryable: boolean };
+      if (e.code === "E_CANCELLED") {
+        return { code: e.code, shipCode: "E_CANCELLED", retryable: true, definitive: true };
+      }
+      return { code: e.code, shipCode: e.code, retryable: e.retryable, definitive: false };
+    }
+    if (cause instanceof Error && typeof (cause as unknown as Record<string, unknown>).code === "string") {
+      const raw = (cause as unknown as Record<string, unknown>).code as string;
+      const upper = raw.toUpperCase();
+      if (upper === "ERR_ABORTED") {
+        return { code: raw, shipCode: "E_CANCELLED", retryable: false, definitive: true };
+      }
+      if (/^[0-9A-Z]{5}$/.test(upper)) {
+        return { code: raw, shipCode: "E_PROVIDER", retryable: false, definitive: true };
+      }
+      return { code: raw, shipCode: "E_PROVIDER", retryable: false, definitive: false };
+    }
+    return { code: "E_PROVIDER", shipCode: "E_PROVIDER", retryable: false, definitive: false };
+  },
+  async begin(client: DatabaseClient): Promise<void> {
+    await client.query("BEGIN");
+    try {
+      await client.query("SET LOCAL statement_timeout = '30000ms'");
+      await client.query("SET LOCAL lock_timeout = '5000ms'");
+    } catch (e) {
+      try { await client.query("ROLLBACK"); } catch { /* best-effort */ }
+      throw e;
+    }
+  },
+  async execute(client: DatabaseClient, sql: string, params: readonly unknown[]): Promise<import("../../database/client.js").DatabaseQueryResult> {
+    return client.query(sql, params);
+  },
+  async commit(client: DatabaseClient): Promise<void> {
+    await client.query("COMMIT");
+  },
+  async rollback(client: DatabaseClient): Promise<boolean> {
+    try { await client.query("ROLLBACK"); return true; }
+    catch { return false; }
+  },
+};
 
 export interface DatabaseRegistration { cleanup(): void; payloads: DatabasePayloadRegistry; }
 
@@ -81,6 +127,7 @@ export function registerDB(
       // ── import action (PGlite or SQLite only) ──────────────────────
       if (params.action === "import") {
         if (isLocal) {
+          if (gatedLocal) throw err("E_APPROVAL_REQUIRED", "local database writes require plan approval; use plan + apply_plan");
           const client = await createPGliteClient(target.dataDir);
           try {
             const result = await importData(client, {
@@ -100,6 +147,7 @@ export function registerDB(
           }
         }
         if (isSQLite) {
+          if (!sqliteOpen) throw err("E_APPROVAL_REQUIRED", "SQLite database writes require PI_SHIP_SQLITE_OPEN=true");
           const client = await sqliteAdapter.connect(target, "write");
           try {
             const result = await importData(client, {
@@ -124,6 +172,7 @@ export function registerDB(
       // ── reset action (local only) ───────────────────────────────────
       if (params.action === "reset") {
         if (!isLocal) throw err("E_PHASE_UNSUPPORTED", "reset action requires local database target");
+        if (gatedLocal) throw err("E_APPROVAL_REQUIRED", "local database reset blocked by PI_SHIP_LOCAL_DB_GATED");
         await resetLocalDatabase(target.dataDir);
         return {
           content: [{ type: "text", text: "Local database reset complete. Empty database ready." }],
@@ -391,58 +440,12 @@ export function registerDB(
         return { content: [{ type: "text", text: `[${label}] Database plan ${plan.planId}: ${plan.riskLevel}` }], details: { planId: plan.planId, planDigest: plan.planDigest, riskLevel: plan.riskLevel, statements: plan.statements, destructiveReasons: plan.destructiveReasons, approved, target: label } };
       }
 
-      // ── apply_plan on PGlite local + open (not gated) — auto-execute ──
-      if (params.action === "apply_plan" && isLocal && !gatedLocal) {
-        const rawPlan = await readPlanFile(cwd, params.planId);
-        if (rawPlan && typeof rawPlan === "object" && (rawPlan as Record<string, unknown>).kind === "db-plan/1") {
-          const client = await createPGliteClient(target.dataDir);
-          try {
-            const payload = payloads.require(params.planId, params.planDigest);
-            const result = await executeLocalQuery(client, payload.sql, payload.params, signal);
-            return defendToolResult({
-              content: [{ type: "text", text: `[local embedded database] Database plan ${params.planId} committed (${result.statementCount} statements, ${result.rowCount} rows)` }],
-              details: { planId: params.planId, planDigest: params.planDigest, status: "committed", statementCount: result.statementCount, affectedRows: result.rowCount },
-            });
-          } finally {
-            try { await client.end(); } catch { /* best-effort */ }
-          }
-        }
-        // Non-db-plan/1: fall through to provider handler
-      }
-
-      // ── apply_plan on SQLite + open flag — auto-execute ─────────────
-      if (params.action === "apply_plan" && isSQLite && sqliteOpen) {
-        const rawPlan = await readPlanFile(cwd, params.planId);
-        if (rawPlan && typeof rawPlan === "object" && (rawPlan as Record<string, unknown>).kind === "db-plan/1") {
-          const client = await sqliteAdapter.connect(target, "write");
-          try {
-            const payload = payloads.require(params.planId, params.planDigest);
-            const classification = await sqliteAdapter.classify(payload.sql, payload.params);
-            let totalAffected = 0;
-            let paramOffset = 0;
-            for (const stmt of classification.statements) {
-              const stmtParams = payload.params.slice(paramOffset, paramOffset + stmt.paramCount);
-              const result = await client.query(stmt.sql, stmtParams);
-              if (result.rowCount !== null) totalAffected += result.rowCount;
-              paramOffset += stmt.paramCount;
-            }
-            return defendToolResult({
-              content: [{ type: "text", text: `[local SQLite database] Database plan ${params.planId} committed (${classification.statements.length} statements, ${totalAffected} rows)` }],
-              details: { planId: params.planId, planDigest: params.planDigest, status: "committed", statementCount: classification.statements.length, affectedRows: totalAffected },
-            });
-          } finally {
-            try { await client.end(); } catch { /* best-effort */ }
-          }
-        }
-        // Non-db-plan/1: fall through to provider handler
-      }
-
       // ── Shared apply_plan (db-plan/1 kind, no manifest/provider) ─────
       if (params.action === "apply_plan") {
         const rawPlan = await readPlanFile(cwd, params.planId);
         if (rawPlan && typeof rawPlan === "object" && (rawPlan as Record<string, unknown>).kind === "db-plan/1") {
           const fingerprints = await contextFingerprints(cwd);
-          const applyEnvironment = resolveDatabaseEnvironment(credentialSource);
+          const applyEnvironment = resolveDatabaseEnvironment(credentialSource, target.kind);
           const productionFlag = credentialSource.get("PI_SHIP_ALLOW_PRODUCTION_DB_WRITES");
 
           if (isMySQL) {
@@ -472,6 +475,29 @@ export function registerDB(
             const result = await sqliteAdapter.executeApproved(target, input);
             return defendToolResult({
               content: [{ type: "text", text: `[local SQLite database] Database plan ${result.planId} committed (${result.statementCount} statements, ${result.affectedRows} rows)` }],
+              details: { planId: result.planId, planDigest: result.planDigest, status: result.status, statementCount: result.statementCount, affectedRows: result.affectedRows },
+            });
+          }
+
+          if (isLocal) {
+            // PGlite (gated or un-gated) — use applyDialectPlan with PGlite executor
+            const input: DialectApplyInput = {
+              cwd, planId: params.planId, planDigest: params.planDigest,
+              environment: applyEnvironment,
+              providerFingerprint: fingerprints.providerFingerprint,
+              manifestFingerprint: fingerprints.manifestFingerprint,
+              productionFlag, registry, payloads, signal,
+            };
+            const targetFingerprint = fingerprintTarget(target);
+            const result = await applyDialectPlan(
+              input,
+              targetFingerprint,
+              classifySQL,
+              pgliteExecutor,
+              async () => createPGliteClient(target.dataDir),
+            );
+            return defendToolResult({
+              content: [{ type: "text", text: `[local embedded database] Database plan ${result.planId} committed (${result.statementCount} statements, ${result.affectedRows} rows)` }],
               details: { planId: result.planId, planDigest: result.planDigest, status: result.status, statementCount: result.statementCount, affectedRows: result.affectedRows },
             });
           }
