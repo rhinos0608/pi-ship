@@ -61,6 +61,14 @@ export interface DialectMutationExecutor {
    *   (e.g. SQLite/MySQL with ? placeholders — each statement's params are a sequential slice)
    */
   paramBinding: 'positional-prefix' | 'sequential';
+
+  /**
+   * Whether the executor supports fully atomic (transactional) execution.
+   * When false, plans containing non-atomic statements (e.g. DDL with
+   * implicit-commit behavior) are rejected before begin().
+   * @default true
+   */
+  atomic?: boolean;
 }
 
 // ── Internal helpers ──
@@ -217,6 +225,13 @@ export async function applyDialectPlan(
       client = await createClient();
       await client.connect();
 
+      // Validate atomicity before begin
+      if (executor.atomic === false && plan.statements.some(s => s.risk === "destructive")) {
+        await safeAppendTerminal(plan, input.cwd, "failed", "E_CONFIG_INVALID");
+        terminalAppended = true;
+        throw err("E_CONFIG_INVALID", "plan contains non-atomic DDL not supported by this dialect");
+      }
+
       await executor.begin(client);
       began = true;
 
@@ -242,7 +257,7 @@ export async function applyDialectPlan(
           const rollbackOk = await safeRollback(client, executor);
           const sqlstate = isSqlstate(de.code);
 
-          if (!writeDispatched || (de.definitive && sqlstate)) {
+          if (!writeDispatched || (de.definitive && (sqlstate || de.shipCode !== "E_CANCELLED"))) {
             if (de.shipCode === "E_CANCELLED" && !sqlstate) {
               await safeAppendTerminal(plan, input.cwd, "failed", "E_CANCELLED");
               terminalAppended = true;

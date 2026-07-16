@@ -841,13 +841,6 @@ describe("applyDialectPlan safety and edge cases", () => {
     const registry = new ApprovalRegistry(cwd);
     registry.approve(plan.planId, plan.planDigest, cwd, { domain: "database", risk: "write" });
 
-    const { classifySQLiteSQL: sqliteClassify } = await import("../../../src/database/dialect/sqlite/classifier.js");
-    // Preflight validates reclass.maxParamRef === plan.paramCount (max of stmt counts),
-    // so wrap sqliteClassify to normalize maxParamRef to max (not sum).
-    const classifyForApply = async (s: string, p: readonly unknown[]) => {
-      const cls = await sqliteClassify(s, p);
-      return { ...cls, maxParamRef: Math.max(...cls.statements.map(st => st.paramCount), 0) };
-    };
     const { client, query } = makeSpyClient();
     query.mockResolvedValue({ fields: [], rows: [], rowCount: 1, command: "INSERT" });
 
@@ -865,7 +858,7 @@ describe("applyDialectPlan safety and edge cases", () => {
         signal: undefined,
       },
       plan.targetFingerprint,
-      classifyForApply,
+      classifySQLiteSQL,
       makeFakeExecutor({ paramBinding: 'sequential' }),
       async () => client,
     );

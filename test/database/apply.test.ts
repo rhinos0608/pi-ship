@@ -361,16 +361,18 @@ describe("applyDatabasePlan execution", () => {
 
   it("runs multi-statement plan in single transaction", async () => {
     // Use $1 in both statements so contiguous param ref is satisfied
+    // accumulatedParamCount = 1 + 1 = 2 (one per statement)
     const sql = "INSERT INTO a VALUES ($1); UPDATE b SET x = $1 WHERE id = $1";
-    const classification = await classifySQL(sql, [1]);
+    const params = [1, 1];
+    const classification = await classifySQL(sql, params);
     const plan = buildDatabasePlan({
       environment: "development", targetFingerprint: TEST_TARGET_FP,
       providerFingerprint: hash("none::provider"), manifestFingerprint: hash("none::manifest"),
-      sql, params: [1], classification,
+      sql, params, classification,
     });
     await persistDatabasePlan(cwd, plan);
     const payloads = new DatabasePayloadRegistry();
-    payloads.register(plan.planId, plan.planDigest, { sql, params: [1], statements: classification.statements });
+    payloads.register(plan.planId, plan.planDigest, { sql, params, statements: classification.statements });
     const registry = new ApprovalRegistry(cwd);
     const risk = plan.riskLevel === "destructive" ? "destructive" : "write";
     registry.approve(plan.planId, plan.planDigest, cwd, { domain: "database", risk });
