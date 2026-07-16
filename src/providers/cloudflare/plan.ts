@@ -21,7 +21,7 @@ const Base = {
 export const CloudflareOperationSchema = Type.Union([
   Type.Object({ ...Base, kind: Type.Literal("ensure_worker"), workerName: NonEmpty, accountId: NonEmpty, source: Type.Optional(Type.String()) }, Strict),
   Type.Object({ ...Base, kind: Type.Literal("set_secrets"), workerName: NonEmpty, secretNames: Type.Array(NonEmpty) }, Strict),
-  Type.Object({ ...Base, kind: Type.Literal("upload_version"), workerName: NonEmpty, accountId: NonEmpty, source: Type.Optional(Type.String()) }, Strict),
+  Type.Object({ ...Base, kind: Type.Literal("upload_version"), workerName: NonEmpty, accountId: NonEmpty, source: Type.Optional(Type.String()), mainModule: Type.Optional(NonEmpty), compatibilityDate: Type.Optional(NonEmpty) }, Strict),
   Type.Object({ ...Base, kind: Type.Literal("deploy"), workerName: NonEmpty, versionId: NonEmpty }, Strict),
   Type.Object({ ...Base, kind: Type.Literal("rollback"), workerName: NonEmpty, targetVersionId: NonEmpty }, Strict),
 ]);

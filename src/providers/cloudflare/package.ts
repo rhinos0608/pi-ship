@@ -1,6 +1,7 @@
 /** Cloudflare package facade. Never imports another provider or registry. */
 import { err } from "../../core/errors.js";
 import type { ProviderExecutionOptions, ProviderPackage } from "../contracts.js";
+import { cloudflareCapabilityProfile } from "../capability-profile.js";
 import { createCloudflareClient } from "./client.js";
 import { loadCloudflareCredentials } from "./credentials.js";
 import { isCloudflareManifest, validateCloudflareManifest } from "./manifest.js";
@@ -40,6 +41,7 @@ function createExecution(manifest: unknown, options: ProviderExecutionOptions): 
 
 export const cloudflarePackage: ProviderPackage = {
   id: "cloudflare",
+  profile: cloudflareCapabilityProfile,
   isManifest: isCloudflareManifest,
   validateManifest: validateCloudflareManifest,
   isPlan: isCloudflarePlan,

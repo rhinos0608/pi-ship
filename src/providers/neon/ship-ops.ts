@@ -198,7 +198,7 @@ async function applyAction(
   if (plan.environment === "production" && plan.intent === "migration" && source.get("PI_SHIP_ALLOW_PRODUCTION_DB_WRITES") !== "true") {
     throw err("E_APPROVAL_REQUIRED", "PI_SHIP_ALLOW_PRODUCTION_DB_WRITES must be 'true' for production database writes");
   }
-  await authorizeNeonPlanApply({ registry, cwd, plan, suppliedDigest: planDigest, signal });
+  await authorizeNeonPlanApply({ registry, cwd, plan, manifest, state, suppliedDigest: planDigest, signal });
 
   const doApply = () => {
     const adapter = createNeonExecution(pi, manifest, state, source, services);

@@ -1,7 +1,8 @@
 import { err } from "../../core/errors.js";
 import type { ProviderPackage } from "../contracts.js";
+import { railwayCapabilityProfile } from "../capability-profile.js";
 import { createRailwayAdapter } from "./adapter.js";
-import { loadRailwayCredentials } from "./credentials.js";
+import { requireRailwayCredentials } from "./credentials.js";
 import { registerRailwayCommands } from "./commands.js";
 import { handleRailwayDatabaseOps } from "./db-ops.js";
 import { isRailwayManifest, validateRailwayManifest } from "./manifest.js";
@@ -13,6 +14,7 @@ export { isRailwayExecution, type RailwayExecution } from "./execution.js";
 
 export const railwayPackage: ProviderPackage = {
   id: "railway",
+  profile: railwayCapabilityProfile,
   isManifest: isRailwayManifest,
   isPlan: isRailwayPlan,
   isState: isRailwayState,
@@ -32,7 +34,7 @@ export const railwayPackage: ProviderPackage = {
     if (options.state !== undefined && !isRailwayState(options.state)) {
       throw err("E_STATE_CONFLICT", "Railway factory requires V1 state");
     }
-    const credentials = loadRailwayCredentials(options.credentialSource);
+    const credentials = requireRailwayCredentials(options.credentialSource);
     const state = options.state !== undefined && isRailwayState(options.state) ? options.state : undefined;
     return {
       provider: "railway",

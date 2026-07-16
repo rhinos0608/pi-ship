@@ -87,7 +87,7 @@ async function planAction(
   services: RegistryServices,
 ): Promise<ToolResult> {
   const state = requireRailwayState(await services.loadState("railway"));
-  const environment = params.environment;
+  const environment = params.environment as "preview" | "production";
   const isRollback = "intent" in params && params.intent === "rollback";
   const isPreview = environment === "preview";
   if (isRollback && isPreview) {
@@ -95,7 +95,7 @@ async function planAction(
   }
   const plan = await buildRailwayPlan(cwd, manifest, environment, {
     intent: isRollback ? "rollback" : "deploy",
-    previewId: isPreview ? params.previewId : undefined,
+    previewId: isPreview && "previewId" in params ? (params as { previewId: string }).previewId : undefined,
     targetReleaseId: isRollback ? params.targetReleaseId : undefined,
     targetSnapshot: snapshot(state),
   });

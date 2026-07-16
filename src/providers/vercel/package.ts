@@ -1,16 +1,24 @@
 /** Vercel package facade. Never imports another provider or registry. */
 import { err } from "../../core/errors.js";
 import type { ProviderExecutionOptions, ProviderPackage } from "../contracts.js";
+import { vercelCapabilityProfile } from "../capability-profile.js";
 import { createVercelClient } from "./client.js";
 import { requireVercelCredentials } from "./credentials.js";
 import { handleVercelDatabaseOps } from "./db-ops.js";
-import { isVercelManifest } from "./manifest.js";
+import { isVercelManifest, validateVercelManifestSemantics } from "./manifest.js";
 import { computeVercelPlanDigest, isVercelPlan } from "./plan.js";
 import { createVercelRuntime } from "./runtime.js";
 import { handleVercelShipOps } from "./ship-ops.js";
 import { defaultVercelState, isVercelState } from "./state.js";
 import type { VercelExecution } from "./execution.js";
 export { isVercelExecution, type VercelExecution } from "./execution.js";
+
+function validateVercelManifest(manifest: unknown): void {
+  if (!isVercelManifest(manifest)) {
+    throw err("E_CONFIG_INVALID", "Vercel manifest has invalid shape");
+  }
+  validateVercelManifestSemantics(manifest);
+}
 
 function createExecution(manifest: unknown, options: ProviderExecutionOptions): VercelExecution {
   if (!isVercelManifest(manifest)) {
@@ -38,7 +46,9 @@ function createExecution(manifest: unknown, options: ProviderExecutionOptions): 
 
 export const vercelPackage: ProviderPackage = {
   id: "vercel",
+  profile: vercelCapabilityProfile,
   isManifest: isVercelManifest,
+  validateManifest: validateVercelManifest,
   isPlan: isVercelPlan,
   isState: isVercelState,
   computePlanDigest: computeVercelPlanDigest,

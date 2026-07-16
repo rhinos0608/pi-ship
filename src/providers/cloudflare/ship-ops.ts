@@ -56,7 +56,7 @@ async function planAction(
   signal: AbortSignal | undefined,
   services: RegistryServices,
 ): Promise<ToolResult> {
-  const environment = params.environment;
+  const environment = params.environment as "preview" | "production";
   const isRollback = "intent" in params && params.intent === "rollback";
   const state = requireState(await services.loadState("cloudflare"));
   const { runtime } = createExecution(pi, cwd, manifest, state, credentialSource, services);
@@ -220,7 +220,7 @@ async function logsAction(
   cwd: string,
   manifest: CloudflareManifest,
   credentialSource: CredentialSource,
-  _params: Extract<ShipInput, { action: "logs" }>,
+  params: Extract<ShipInput, { action: "logs" }>,
   signal: AbortSignal | undefined,
   services: RegistryServices,
 ): Promise<ToolResult> {
@@ -231,7 +231,8 @@ async function logsAction(
   }
   const { runtime } = createExecution(pi, cwd, manifest, state, credentialSource, services);
   const secretValues = Object.values(loadAppSecrets(credentialSource, manifest.secrets ?? []));
-  const logResult = await runtime.logs(lastDeployment.id, { lines: 100, secretValues }, signal);
+  const requestedLines = params.lines ?? 100;
+  const logResult = await runtime.logs(lastDeployment.id, { lines: requestedLines, secretValues }, signal);
   if (logResult.status === "unverified") {
     return {
       content: [{ type: "text", text: `Logs unavailable: ${logResult.safeMessage}` }],

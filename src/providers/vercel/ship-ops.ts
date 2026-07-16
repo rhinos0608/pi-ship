@@ -62,7 +62,7 @@ async function planV2(
   fetchImpl: ((input: string, init?: RequestInit) => Promise<Response>) | undefined,
   services: RegistryServices,
 ): Promise<ToolResult> {
-  const environment = params.environment;
+  const environment = params.environment as "preview" | "production";
   const isRollback = "intent" in params && params.intent === "rollback";
   const state = requireState(await services.loadState("vercel"));
   const { runtime } = createExecution(pi, cwd, manifest, state, credentialSource, fetchImpl, services);

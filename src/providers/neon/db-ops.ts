@@ -132,13 +132,13 @@ async function applyMigration(
   }
 
   const state = requireState(await services.loadState("neon"));
-  await authorizeNeonPlanApply({ registry, cwd, plan, suppliedDigest: planDigest, signal });
+  await authorizeNeonPlanApply({ registry, cwd, plan, manifest, state, suppliedDigest: planDigest, signal });
 
   const adapter = createNeonExecution(pi, manifest, state, source, services);
 
   return applyNeonPlan({
     adapter,
-    manifest: plan.manifest,
+    manifest,
     plan,
     cwd,
     envReader,

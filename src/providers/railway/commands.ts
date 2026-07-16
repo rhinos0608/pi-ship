@@ -6,7 +6,7 @@ import { join } from "node:path";
 import type { ApprovalRegistry } from "../../core/approval.js";
 import { writeApprovalSidecar } from "../../core/approval-store.js";
 import { err } from "../../core/errors.js";
-import { environmentSource, loadAppSecrets } from "../../deployment/credentials.js";
+import { loadAppSecrets } from "../../deployment/credentials.js";
 import type { RegistryServices } from "../contracts.js";
 import { requestRailwayApproval } from "./approval.js";
 import { authorizeRailwayPlanApply } from "./authorization.js";
@@ -68,7 +68,7 @@ function createAdapter(
   secretNames: readonly string[],
   services: RegistryServices,
 ) {
-  const source = environmentSource();
+  const source = services.credentialSource;
   const execution = services.createExecution(manifest, {
     pi,
     credentialSource: source,
@@ -198,7 +198,7 @@ async function applyCommand(
   const { services, manifest, state } = await loadCommandContext(makeServices, cwd);
   const plan = requirePlan(await services.loadPlan("railway", planId));
   await authorizeRailwayPlanApply({ registry, cwd, plan, suppliedDigest: planDigest, manifest, state });
-  const source = environmentSource();
+  const source = services.credentialSource;
   const envReader = (names: string[]) => {
     const output: Record<string, string | undefined> = {};
     for (const name of names) output[name] = source.get(name);

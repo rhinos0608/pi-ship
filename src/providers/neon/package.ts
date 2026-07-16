@@ -1,5 +1,6 @@
 import { err } from "../../core/errors.js";
 import type { ProviderPackage } from "../contracts.js";
+import { neonCapabilityProfile } from "../capability-profile.js";
 import { createNeonAdapter } from "./adapter.js";
 import { loadNeonCredentials } from "./credentials.js";
 import { handleNeonDatabaseOps } from "./db-ops.js";
@@ -12,6 +13,7 @@ export { isNeonExecution, type NeonExecution } from "./execution.js";
 
 export const neonPackage: ProviderPackage = {
   id: "neon",
+  profile: neonCapabilityProfile,
   isManifest: isNeonManifest,
   isPlan: isNeonPlan,
   isState: isNeonState,

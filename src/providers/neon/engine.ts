@@ -42,6 +42,8 @@ export async function applyNeonPlan(ctx: ApplyNeonContext): Promise<ToolResult> 
       registry: ctx.registry,
       cwd,
       plan,
+      manifest,
+      state,
       suppliedDigest: ctx.suppliedDigest,
       signal,
     });
