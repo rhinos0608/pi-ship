@@ -9,11 +9,17 @@ import { err } from "../core/errors.js";
  * Local target only. Caller must gate this to local targets.
  */
 export async function resetLocalDatabase(dataDir: string): Promise<void> {
-  await resetPGliteInstance(dataDir);
-  // Re-initialize so the next operation has a fresh empty database
   try {
+    await resetPGliteInstance(dataDir);
+    // Re-initialize so the next operation has a fresh empty database
     await getPGliteInstance(dataDir);
   } catch (cause) {
-    throw err("E_PROVIDER", "database reset failed; local database may be in inconsistent state");
+    throw err(
+      "E_PROVIDER",
+      "database reset failed; local database may be in inconsistent state",
+      false,
+      undefined,
+      { cause },
+    );
   }
 }

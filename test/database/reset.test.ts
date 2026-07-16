@@ -42,6 +42,26 @@ describe("resetLocalDatabase", () => {
     vi.restoreAllMocks();
   });
 
+  it("throws E_PROVIDER when reset itself fails", async () => {
+    const origErr = new Error("disk full");
+    vi.spyOn(instanceCache, "resetPGliteInstance").mockRejectedValue(origErr);
+
+    let thrown: unknown;
+    try {
+      await resetLocalDatabase("/nonexistent/path");
+    } catch (e) {
+      thrown = e;
+    }
+
+    expect(thrown).toMatchObject({
+      code: "E_PROVIDER",
+    });
+    // Original error is preserved as cause
+    expect((thrown as Error).cause).toBe(origErr);
+
+    vi.restoreAllMocks();
+  });
+
   it("resetPGliteInstance handles missing directory gracefully", async () => {
     vi.spyOn(instanceCache, "resetPGliteInstance").mockImplementation(async (dir: string) => {
       await rm(dir, { recursive: true, force: true }); // force+recursive handles missing

@@ -75,7 +75,10 @@ function resolveSqliteRef(input: string, cwd: string): string {
     if (rest.startsWith("///")) {
       filePath = rest.slice(2); // sqlite:///path → /path
     } else if (rest.startsWith("//")) {
-      filePath = rest.slice(2); // sqlite://host/path → /path (ignore host)
+      // sqlite://host/path — strip the authority segment, keep the path
+      const afterSlashes = rest.slice(2); // "host/path"
+      const slashIdx = afterSlashes.indexOf("/");
+      filePath = slashIdx >= 0 ? afterSlashes.slice(slashIdx) : "/";
     } else {
       filePath = rest; // sqlite:path or sqlite:/path
     }
@@ -138,13 +141,6 @@ function resolveSqliteRef(input: string, cwd: string): string {
 
   if (!effectiveNorm.startsWith(cwdNorm)) {
     throw err("E_CONFIG_INVALID", "database file path must be within working directory");
-  }
-
-  // Reject '..' escape in non-existent path segments
-  for (const seg of extraSegments) {
-    if (seg === "..") {
-      throw err("E_CONFIG_INVALID", "database file path must be within working directory");
-    }
   }
 
   return resolved;

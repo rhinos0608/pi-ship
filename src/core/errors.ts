@@ -23,9 +23,10 @@ export function err(
   code: ShipErrorCode,
   message: string,
   retryable = false,
-  details?: Record<string, unknown>
+  details?: Record<string, unknown>,
+  options?: { cause?: unknown },
 ): ShipError {
-  const error = new Error(message) as ShipError;
+  const error = new Error(message, options) as ShipError;
   error.code = code;
   error.retryable = retryable;
   error.details = details;

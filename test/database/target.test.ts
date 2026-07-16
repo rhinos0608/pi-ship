@@ -203,4 +203,25 @@ describe("fingerprintTarget", () => {
       fingerprintTarget("postgresql://u:p@h:5432/d")
     );
   });
+
+  it("produces different hashes for local vs remote targets", () => {
+    const local = fingerprintTarget({ kind: "local", dialect: "pglite", dataDir: "/projects/app/.pi-ship/local-db" });
+    const remote = fingerprintTarget("postgres://user:pass@host:5432/db");
+    expect(local).not.toBe(remote);
+  });
+
+  it("produces different hashes for different remote targets", () => {
+    const fp1 = fingerprintTarget("postgres://a:p@h1:5432/db1");
+    const fp2 = fingerprintTarget("postgres://b:p@h2:5432/db2");
+    expect(fp1).not.toBe(fp2);
+  });
+
+  it("produces different hashes for different target kinds", () => {
+    const local = fingerprintTarget({ kind: "local", dialect: "pglite", dataDir: "/data/ship" });
+    const file = fingerprintTarget({ kind: "file", dialect: "sqlite", path: "/data/ship/db.sqlite" });
+    const remote = fingerprintTarget("postgres://u:p@h:5432/db");
+    expect(local).not.toBe(file);
+    expect(local).not.toBe(remote);
+    expect(file).not.toBe(remote);
+  });
 });

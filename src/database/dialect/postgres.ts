@@ -47,7 +47,12 @@ export const postgresAdapter: DialectAdapter = {
     }
     const factory = createDefaultClientFactory();
     const client = factory(target.url);
-    await client.connect();
+    try {
+      await client.connect();
+    } catch (errConn) {
+      await client.end().catch(() => {});
+      throw errConn;
+    }
     return client;
   },
 
