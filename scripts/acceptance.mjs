@@ -6,10 +6,12 @@ const result = spawnSync("npx", [
   "--run",
   "test/acceptance/railway.e2e.test.ts",
   "test/acceptance/vercel.e2e.test.ts",
+  "test/acceptance/cloudflare.e2e.test.ts",
+  "test/acceptance/neon.e2e.test.ts",
   "test/acceptance/database.e2e.test.ts",
 ], {
   stdio: "inherit",
   env: { ...process.env, RAILWAY_API_TOKEN: "", RAILWAY_TOKEN: "", VERCEL_TOKEN: "" },
 });
 if (result.status !== 0) process.exit(result.status ?? 1);
-console.log("PASS acceptance lifecycles (Railway, Vercel, shared DB)");
+console.log("PASS acceptance lifecycles (Railway, Vercel, Cloudflare, Neon, shared DB)");
