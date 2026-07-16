@@ -43,8 +43,8 @@ const OP_MAP: Record<string, { sql: string; requiresValue: boolean }> = {
  * Build a SELECT statement and params for MySQL browse.
  * Uses backtick quoting and `?` placeholders.
  */
-function buildMySQLBrowseQuery(input: DialectBrowseInput): { sql: string; bindParams: unknown[] } {
-  const schemaName = input.schema ?? "public";
+function buildMySQLBrowseQuery(input: DialectBrowseInput, defaultSchema?: string): { sql: string; bindParams: unknown[] } {
+  const schemaName = input.schema ?? defaultSchema ?? "public";
   const safeSchema = backtickQuote(schemaName);
   const safeTable = backtickQuote(input.table);
 
@@ -132,14 +132,14 @@ export async function executeMySQLBrowse(
     for (const o of input.orderBy) backtickQuote(o.column);
   }
 
-  const { sql, bindParams } = buildMySQLBrowseQuery(input);
+  const opts = parseMySQLURL(target.url);
+  const defaultSchema = opts.database as string | undefined;
+  const { sql, bindParams } = buildMySQLBrowseQuery(input, defaultSchema);
 
   const offset = input.offset ?? 0;
   const limitPlusOne = input.limit + 1;
   const fullSql = `${sql} LIMIT ? OFFSET ?`;
   const allParams = [...bindParams, limitPlusOne, offset];
-
-  const opts = parseMySQLURL(target.url);
   let client: import("../../client.js").DatabaseClient | undefined;
   let began = false;
 
@@ -171,15 +171,14 @@ export async function executeMySQLBrowse(
       rows: safe.rows,
       rowCount: safe.rowCount,
       hasMore: hasMoreRaw || safe.truncated,
-      schema: input.schema ?? "public",
+      schema: input.schema ?? defaultSchema ?? "public",
       table: input.table,
     };
   } catch (cause) {
     if (began && client) {
       try { await client.query("ROLLBACK"); } catch { /* ignore rollback error */ }
     }
-    mapMySQLError(cause);
-    throw cause;
+    throw mapMySQLError(cause);
   } finally {
     if (client) {
       try { await client.end(); } catch { /* ignore end error */ }

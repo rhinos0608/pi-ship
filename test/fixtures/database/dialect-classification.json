@@ -130,8 +130,8 @@
   { "dialect": ["mysql"], "sql": "SHOW TABLES", "params": [], "expect": { "error": true } },
   { "dialect": ["mysql"], "sql": "SET NAMES utf8", "params": [], "expect": { "error": true } },
 
-  "── MySQL: multi-statement ─────────────────────────────────────────────",
-  { "dialect": ["mysql"], "sql": "SELECT 1; SELECT 2", "params": [], "expect": { "riskLevel": "read", "statementCount": 2 } },
-  { "dialect": ["mysql"], "sql": "SELECT 1; INSERT INTO users (name) VALUES ('test')", "params": [], "expect": { "riskLevel": "write", "statementCount": 2 } },
-  { "dialect": ["mysql"], "sql": "SELECT ?; INSERT INTO items (name) VALUES (?)", "params": [1, "hello"], "expect": { "riskLevel": "write", "statementCount": 2 } }
+  "── MySQL: multi-statement (rejected) ────────────────────────────────────",
+  { "dialect": ["mysql"], "sql": "SELECT 1; SELECT 2", "params": [], "expect": { "error": true } },
+  { "dialect": ["mysql"], "sql": "SELECT 1; INSERT INTO users (name) VALUES ('test')", "params": [], "expect": { "error": true } },
+  { "dialect": ["mysql"], "sql": "SELECT ?; INSERT INTO items (name) VALUES (?)", "params": [1, "hello"], "expect": { "error": true } }
 ]

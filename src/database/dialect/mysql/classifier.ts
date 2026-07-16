@@ -172,10 +172,10 @@ export async function classifyMySQLSQL(sql: string, params: readonly unknown[] =
   }
 
   const rawStatements = Array.isArray(parsed.ast) ? parsed.ast : [parsed.ast];
-  if (!rawStatements.length || rawStatements.length > 20) {
+  if (rawStatements.length !== 1) {
     throw err(
       "E_CONFIG_INVALID",
-      !rawStatements.length ? "SQL must contain at least one statement" : "SQL has too many statements (max 20)",
+      rawStatements.length === 0 ? "SQL must contain at least one statement" : "MySQL adapter requires exactly one statement",
     );
   }
 

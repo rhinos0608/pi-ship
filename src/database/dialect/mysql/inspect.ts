@@ -75,6 +75,18 @@ ORDER BY k.TABLE_SCHEMA, k.TABLE_NAME, k.CONSTRAINT_NAME
 LIMIT 501
 `;
 
+const TRIGGERS_SQL = `
+SELECT TRIGGER_SCHEMA AS schema,
+       EVENT_OBJECT_TABLE AS table_name,
+       TRIGGER_NAME AS name,
+       ACTION_TIMING AS timing,
+       EVENT_MANIPULATION AS events
+FROM information_schema.TRIGGERS
+WHERE TRIGGER_SCHEMA NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
+ORDER BY TRIGGER_SCHEMA, EVENT_OBJECT_TABLE, TRIGGER_NAME
+LIMIT 501
+`;
+
 /** Split pipe-separated column string into array. */
 function splitColumns(value: unknown): string[] {
   if (typeof value === "string" && value.length > 0) return value.split("|").filter(Boolean);
@@ -223,10 +235,32 @@ export async function inspectMySQL(
       deferred: false,
     }));
 
-    // PG-only categories — empty arrays
+    // PG-only categories — empty arrays (enums, policies)
     result.enums = [];
-    result.triggers = [];
     result.policies = [];
+
+    // Triggers from information_schema.TRIGGERS
+    let triggersRaw: Record<string, unknown>[] = [];
+    try {
+      const triggerResult = await client.query(TRIGGERS_SQL);
+      triggersRaw = (triggerResult.rows ?? []) as Record<string, unknown>[];
+    } catch {
+      // Best-effort — some hosts restrict information_schema.TRIGGERS access
+    }
+    if (triggersRaw.length > CATEGORY_LIMIT) {
+      if (!result.truncatedCategories.includes("triggers")) {
+        result.truncatedCategories.push("triggers");
+      }
+    }
+    result.triggers = triggersRaw.slice(0, CATEGORY_LIMIT).map((r: Record<string, unknown>) => ({
+      schema: String(normalizeCell(r.schema)),
+      table: String(normalizeCell(r.table_name)),
+      name: String(normalizeCell(r.name)),
+      timing: String(normalizeCell(r.timing)),
+      events: [String(normalizeCell(r.events))],
+      row: true,
+      enabled: true,
+    }));
 
     await client.query("ROLLBACK");
     began = false;
@@ -236,8 +270,7 @@ export async function inspectMySQL(
     if (began && client) {
       try { await client.query("ROLLBACK"); } catch { /* ignore */ }
     }
-    mapMySQLError(cause);
-    throw cause;
+    throw mapMySQLError(cause);
   } finally {
     if (client) {
       try { await client.end(); } catch { /* ignore end error */ }

@@ -101,14 +101,20 @@ describe("MySQL read", () => {
     expect(result.rowCount).toBe(3);
   });
 
-  it("ROLLBACKs on error", async () => {
+  it("ROLLBACKs on mid-transaction error", async () => {
     const { executeMySQLRead } = await import("../../../../src/database/dialect/mysql/read.js");
 
-    fakeConnect.mockRejectedValueOnce(new Error("connection failed"));
+    fakeExecute.mockReset();
+    fakeExecute.mockResolvedValueOnce([[], []]);   // START TRANSACTION READ ONLY
+    fakeExecute.mockRejectedValueOnce(new Error("query failed")); // query
 
     await expect(
       executeMySQLRead(target, { sql: "SELECT * FROM users" }),
     ).rejects.toThrow();
+    // Connect succeeded, transaction started, rollback attempted
+    expect(fakeConnect).toHaveBeenCalledTimes(1);
+    const executeCalls = fakeExecute.mock.calls.map((c: any[]) => c[0]);
+    expect(executeCalls[0]).toContain("START TRANSACTION READ ONLY");
   });
 });
 

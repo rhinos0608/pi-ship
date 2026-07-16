@@ -64,10 +64,10 @@ describe("MySQL client", () => {
       expect(opts.debug).toBeUndefined();
     });
 
-    it("passes ssl string param", async () => {
+    it("passes ssl param as boolean true for mysql2 contract", async () => {
       const { parseMySQLURL } = await import("../../../../src/database/dialect/mysql/client.js");
       const opts = parseMySQLURL("mysql://user:pass@host/db?ssl=true");
-      expect(opts.ssl).toBe("true");
+      expect(opts.ssl).toBe(true);
     });
 
     it("passes sslmode param as rejectUnauthorized", async () => {

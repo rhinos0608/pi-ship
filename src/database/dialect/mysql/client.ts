@@ -40,7 +40,8 @@ export function parseMySQLURL(url: string): Record<string, unknown> {
   // TLS/SSL params only — never spread arbitrary query params
   const sslKeys = parsed.searchParams.get("ssl");
   if (sslKeys !== null) {
-    opts.ssl = sslKeys;
+    // mysql2 expects boolean or object for ssl; convert "true" → true
+    opts.ssl = sslKeys === "true" ? true : sslKeys;
   }
   const sslmode = parsed.searchParams.get("sslmode");
   if (sslmode !== null) {
@@ -64,7 +65,7 @@ export async function createMySQLClient(options: Record<string, unknown>): Promi
   const mysql2 = await getMySQL2();
   // Always enforce multipleStatements false
   const driverOpts = { ...options, multipleStatements: false };
-  const raw = mysql2.createConnection(driverOpts);
+  const raw = await mysql2.createConnection(driverOpts);
 
   const adapter: DatabaseClient = {
     async connect(): Promise<void> {

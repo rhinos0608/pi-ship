@@ -54,8 +54,10 @@ export async function executeMySQLRead(
 
     // Execute with limit+1 for hasMore detection
     checkAborted(signal);
-    const boundedSql = `${options.sql.trim().replace(/;?\s*$/, "")} LIMIT ?`;
-    const allParams = [...params, limit + 1];
+    const trimmedSql = options.sql.trim().replace(/;?\s*$/, "");
+    const hasExplicitLimit = /\bLIMIT\b/i.test(trimmedSql);
+    const boundedSql = hasExplicitLimit ? trimmedSql : `${trimmedSql} LIMIT ?`;
+    const allParams = hasExplicitLimit ? params : [...params, limit + 1];
     const result = await client.query(boundedSql, allParams);
 
     await client.query("ROLLBACK");

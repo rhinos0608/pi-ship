@@ -73,6 +73,7 @@ function fingerprintMySQL(target: DatabaseTarget): string {
 // ── MySQL mutation executor for applyDialectPlan ──
 
 const mysqlExecutor: DialectMutationExecutor = {
+  atomic: false,
   paramBinding: 'sequential',
   classifyError(cause: unknown): DialectError {
     if (isShipError(cause)) {
