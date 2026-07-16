@@ -26,9 +26,13 @@ pi-ship is that fix. It layers three defenses that a system prompt cannot:
 
 ## Runtime tools
 
+pi-ship registers tools based on the provider declared in `pi-ship.json`. The model sees only actions relevant to the selected provider — no superset of all possible operations.
+
 ### `DB` — database operations (always registered)
 
 Available with zero configuration. Actions: `inspect`, `browse`, `query`, `plan`, `apply_plan`, `import`, `reset`, `migration_status`.
+
+When a provider manifest is present, `plan_migration` is added for Railway and Neon profiles.
 
 When `DATABASE_URL` is absent, DB falls back to an embedded PGlite instance — see [Local database](#local-database-zero-config).
 
@@ -36,7 +40,16 @@ When `DATABASE_URL` is absent, DB falls back to an embedded PGlite instance — 
 
 Registered only when a `pi-ship.json` manifest exists in the project directory. Without a manifest, pi-ship operates in local-only mode: DB tool is available but ship and provider slash commands are not.
 
-Actions: `validate`, `plan`, `apply_plan`, `status`, `logs`.
+Available actions depend on the provider profile:
+
+| Profile | Ship actions |
+|---|---|
+| Railway | `validate`, `plan`, `apply_plan`, `status`, `logs`, `rollback` |
+| Vercel | `validate`, `plan`, `apply_plan`, `status`, `logs`, `rollback` |
+| Cloudflare | `validate`, `plan`, `apply_plan`, `status`, `logs`, `rollback` |
+| Neon | `validate`, `plan`, `apply_plan`, `status`, `rollback` (no logs API) |
+
+Provider slash commands (`ship-init`, `ship-plan`, `ship-apply`, `ship-status`, `ship-logs`, `ship-rollback`) are registered only for Railway.
 
 ## DB actions
 
@@ -48,7 +61,7 @@ Actions: `validate`, `plan`, `apply_plan`, `status`, `logs`.
 | `plan` | Classify SQL, create metadata-only plan, persist, request approval | Yes (remote) / No (local)¹ | No | No |
 | `apply_plan` (`db-plan/1`) | Apply a shared database plan | Yes (remote) / No (local)¹ | No | Yes (write) |
 | `apply_plan` (provider plan) | Apply a provider migration plan | No | Yes | No |
-| `plan_migration` | Create a Railway migration plan | No | Yes (Railway) | No |
+| `plan_migration` | Create a provider migration plan | No | Yes (Railway, Neon) | No |
 | `migration_status` | Show migration status (reads database journal) | No | No | No |
 | `import` | Import JSON/CSV into a local table | No | No | Yes (local write) |
 | `reset` | Wipe and recreate the local database | No | No | No |
@@ -90,12 +103,16 @@ DB.action: apply_plan, planId: "<planId>", planDigest: "<planDigest>"
 
 ## Providers
 
-| Provider | Pattern | Manifest `provider` | Capabilities |
-|----------|---------|---------------------|-------------|
-| Railway | Adapter + journal | `"railway"` | Deploy, migrate, rollback, status, logs |
-| Vercel | Operation-engine | `"vercel"` | Deploy, rollback, status, logs, preview |
-| Cloudflare Workers | Operation-engine | `"cloudflare"` | Deploy, rollback, status, logs, preview |
-| Neon | Adapter + journal | `"neon"` | Provision, migrate, preview branch, recovery point |
+pi-ship selects its provider from `pi-ship.json` at startup. The manifest is read once, validated, and bound immutably — changes require a restart. Each provider declares a capability profile that determines which ship actions, DB additions, slash commands, and resource types are available.
+
+| Provider | Manifest `provider` | Ship | DB additions | Commands | Resource |
+|---|---|---|---|---|---|
+| Railway | `"railway"` | validate, plan, apply, status, logs, rollback | plan_migration | ship-init, ship-plan, ship-apply, ship-status, ship-logs, ship-rollback | railway-deployment |
+| Vercel | `"vercel"` | validate, plan, apply, status, logs, rollback | none | none | vercel-deployment |
+| Cloudflare | `"cloudflare"` | validate, plan, apply, status, logs, rollback | none | none | cloudflare-deployment |
+| Neon | `"neon"` | validate, plan, apply, status, rollback | plan_migration | none | neon-control-plane |
+
+See [ADR 0012](docs/adr/0012-provider-scoped-tool-surfaces.md) for the capability profile design.
 
 ### Per-provider capability details
 
