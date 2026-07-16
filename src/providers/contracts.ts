@@ -3,6 +3,7 @@ import type { ApprovalRegistry } from "../core/approval.js";
 import type { CredentialSource } from "../deployment/credentials.js";
 import type { DatabaseHandler } from "../tools/db/contracts.js";
 import type { ShipHandler } from "../tools/ship/contracts.js";
+import type { ProviderCapabilityProfile } from "./capability-profile.js";
 
 export type ProviderId = string;
 
@@ -21,6 +22,8 @@ export interface ProviderExecutionOptions {
 
 /** Registry operations exposed to provider handlers without importing registry composition. */
 export interface RegistryServices {
+  /** Credential source bound at registration time (vault-aware in exclusive mode). */
+  readonly credentialSource: CredentialSource;
   loadManifest(): Promise<unknown>;
   loadState(packageId: ProviderId): Promise<unknown>;
   saveState(packageId: ProviderId, state: unknown): Promise<void>;
@@ -31,6 +34,7 @@ export interface RegistryServices {
 
 export interface ProviderPackage {
   id: ProviderId;
+  profile: ProviderCapabilityProfile;
   isManifest(value: unknown): boolean;
   isPlan(value: unknown): boolean;
   isState(value: unknown): boolean;

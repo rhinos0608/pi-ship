@@ -1,7 +1,7 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { err } from "../core/errors.js";
 import type { ApprovalRegistry } from "../core/approval.js";
-import { loadManifestContract } from "../persistence/manifest-store.js";
+import { loadManifestContract, loadProviderRuntimeBinding } from "../persistence/manifest-store.js";
 import { readPlanFile, validateLoadedPlan, persistPlan as persistStoredPlan } from "../persistence/plan-store.js";
 import { loadRegisteredState, saveRegisteredState } from "../persistence/state-store.js";
 import type {
@@ -12,6 +12,9 @@ import type {
   ProviderPackage,
   RegistryServices,
 } from "./contracts.js";
+import type { ProviderCapabilityProfile, ProviderRuntimeBinding } from "./capability-profile.js";
+import type { CredentialSource } from "../deployment/credentials.js";
+import { environmentSource } from "../deployment/credentials.js";
 import { railwayPackage } from "./railway/package.js";
 import { vercelPackage } from "./vercel/package.js";
 import { cloudflarePackage } from "./cloudflare/package.js";
@@ -41,7 +44,7 @@ function requireUniquePackage(
 }
 
 export class ProviderRegistry implements ProviderCatalog {
-  private readonly packages: readonly ProviderPackage[];
+  readonly packages: readonly ProviderPackage[];
   private readonly byId: ReadonlyMap<ProviderId, ProviderPackage>;
 
   constructor(packages: readonly ProviderPackage[]) {
@@ -55,6 +58,10 @@ export class ProviderRegistry implements ProviderCatalog {
 
   ids(): readonly ProviderId[] {
     return this.packages.map((providerPackage) => providerPackage.id);
+  }
+
+  async loadRuntimeBinding(cwd: string): Promise<ProviderRuntimeBinding> {
+    return loadProviderRuntimeBinding(cwd, this.packages);
   }
 
   packageFor(packageId: ProviderId): ProviderPackage {
@@ -149,9 +156,18 @@ export class ProviderRegistry implements ProviderCatalog {
     });
   }
 
-  services(cwd: string): RegistryServices {
+  services(cwd: string, binding?: ProviderRuntimeBinding, credentialSource?: CredentialSource): RegistryServices {
+    const source = credentialSource ?? environmentSource();
     return {
-      loadManifest: async () => (await this.loadManifest(cwd)).manifest,
+      credentialSource: source,
+      loadManifest: binding
+        ? async () => {
+            if (binding.manifest === undefined) {
+              throw err("E_CONFIG_INVALID", "no manifest available in startup binding");
+            }
+            return binding.manifest;
+          }
+        : async () => (await this.loadManifest(cwd)).manifest,
       loadState: (packageId) => this.loadState(cwd, packageId),
       saveState: (packageId, state) => this.saveState(cwd, state, packageId),
       loadPlan: (packageId, planId) => this.loadPlan(cwd, packageId, planId),
@@ -164,11 +180,53 @@ export class ProviderRegistry implements ProviderCatalog {
     pi: ExtensionAPI,
     approvalRegistry: ApprovalRegistry,
     makeServices: (cwd: string) => RegistryServices,
+    binding?: ProviderRuntimeBinding,
   ): void {
-    for (const providerPackage of this.packages) {
-      providerPackage.registerCommands?.(pi, approvalRegistry, makeServices);
+    // When a binding is provided, wrap registerCommand to reject undeclared
+    // names and assert manifest integrity on every accepted handler dispatch.
+    // Even when profile.commands is empty, the wrapper ensures undeclared
+    // registration always rejects (fails closed for safety).
+    const profile = binding?.profile;
+    const effectivePi = binding
+      ? wrapCommandAPI(pi, profile!, binding)
+      : pi;
+    const toRegister = binding?.package ? [binding.package] : this.packages;
+    for (const providerPackage of toRegister) {
+      providerPackage.registerCommands?.(effectivePi, approvalRegistry, makeServices);
     }
   }
+}
+
+/**
+ * Build a proxy pi that wraps registerCommand to:
+ * - Reject command names not in the profile's command list
+ * - Wrap accepted handlers with assertIntact(ctx.cwd) as first dispatch statement
+ */
+function wrapCommandAPI(
+  pi: ExtensionAPI,
+  profile: ProviderCapabilityProfile,
+  binding: ProviderRuntimeBinding,
+): ExtensionAPI {
+  const origRegisterCommand = pi.registerCommand.bind(pi);
+  const wrappedRegisterCommand: ExtensionAPI['registerCommand'] = (name, options) => {
+    if (!profile.commands.includes(name)) {
+      throw err("E_CONFIG_INVALID", `command "${name}" not declared in provider profile`);
+    }
+    const origHandler = options.handler;
+    origRegisterCommand(name, {
+      ...options,
+      handler: async (args: string, ctx: ExtensionCommandContext) => {
+        await binding.assertIntact(ctx.cwd);
+        return origHandler(args, ctx);
+      },
+    });
+  };
+  return new Proxy(pi, {
+    get(target, prop, receiver) {
+      if (prop === "registerCommand") return wrappedRegisterCommand;
+      return Reflect.get(target, prop, receiver);
+    },
+  });
 }
 
 export function createProviderRegistry(packages: readonly ProviderPackage[]): ProviderRegistry {
