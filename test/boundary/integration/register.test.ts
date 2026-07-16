@@ -1,9 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { rmSync } from "node:fs";
 import type { CredentialSource } from "../../../src/deployment/credentials.js";
+import type { ProviderRuntimeBinding } from "../../../src/providers/capability-profile.js";
+import { localCapabilityProfile } from "../../../src/providers/capability-profile.js";
 
 function makeCredentialSource(vars: Record<string, string | undefined>): CredentialSource {
   return { get: (name: string) => vars[name] };
@@ -28,6 +30,18 @@ function setPermissionSystemSentinel(active: boolean): void {
   } else {
     delete (globalThis as any).__piPermissionSystem;
   }
+}
+
+/** Build a mock binding that returns the given manifest. */
+function makeMockBinding(cwd: string, manifest?: unknown): ProviderRuntimeBinding {
+  return {
+    cwd,
+    manifest,
+    package: undefined,
+    profile: localCapabilityProfile,
+    manifestBytesDigest: undefined,
+    async assertIntact() {},
+  };
 }
 
 describe("registerBoundary", () => {
@@ -61,12 +75,15 @@ describe("registerBoundary", () => {
     // Simulate pi-permission-system loaded and active.
     setPermissionSystemSentinel(true);
 
+    const manifest = JSON.parse(readFileSync(join(tmpDir, "pi-ship.json"), "utf8"));
+    const binding = { ...makeMockBinding(tmpDir, manifest) };
+
     const { registerBoundary } = await import("../../../src/boundary/integration/register.js");
     const { ApprovalRegistry } = await import("../../../src/core/approval.js");
     const approvalRegistry = new ApprovalRegistry();
     const source = makeCredentialSource({ DATABASE_URL: "postgres://test" });
 
-    const result = await registerBoundary(pi as any, tmpDir, source, approvalRegistry);
+    const result = await registerBoundary(pi as any, binding, source, approvalRegistry);
 
     expect(result).not.toBeNull();
     expect(result!.vault).toBeDefined();
@@ -102,12 +119,15 @@ describe("registerBoundary", () => {
       }),
     );
 
+    const manifest = JSON.parse(readFileSync(join(tmpDir, "pi-ship.json"), "utf8"));
+    const binding = { ...makeMockBinding(tmpDir, manifest) };
+
     const { registerBoundary } = await import("../../../src/boundary/integration/register.js");
     const { ApprovalRegistry } = await import("../../../src/core/approval.js");
     const approvalRegistry = new ApprovalRegistry();
     const source = makeCredentialSource({});
 
-    const result = await registerBoundary(pi as any, tmpDir, source, approvalRegistry);
+    const result = await registerBoundary(pi as any, binding, source, approvalRegistry);
     expect(result).toBeNull();
   });
 
@@ -120,12 +140,15 @@ describe("registerBoundary", () => {
       }),
     );
 
+    const manifest = JSON.parse(readFileSync(join(tmpDir, "pi-ship.json"), "utf8"));
+    const binding = { ...makeMockBinding(tmpDir, manifest) };
+
     const { registerBoundary } = await import("../../../src/boundary/integration/register.js");
     const { ApprovalRegistry } = await import("../../../src/core/approval.js");
     const approvalRegistry = new ApprovalRegistry();
     const source = makeCredentialSource({});
 
-    const result = await registerBoundary(pi as any, tmpDir, source, approvalRegistry);
+    const result = await registerBoundary(pi as any, binding, source, approvalRegistry);
     expect(result).toBeNull();
   });
 
@@ -139,12 +162,15 @@ describe("registerBoundary", () => {
       }),
     );
 
+    const manifest = JSON.parse(readFileSync(join(tmpDir, "pi-ship.json"), "utf8"));
+    const binding = { ...makeMockBinding(tmpDir, manifest) };
+
     const { registerBoundary } = await import("../../../src/boundary/integration/register.js");
     const { ApprovalRegistry } = await import("../../../src/core/approval.js");
     const approvalRegistry = new ApprovalRegistry();
     const source = makeCredentialSource({});
 
-    const result = await registerBoundary(pi as any, tmpDir, source, approvalRegistry);
+    const result = await registerBoundary(pi as any, binding, source, approvalRegistry);
     expect(result).not.toBeNull();
   });
 
@@ -161,13 +187,16 @@ describe("registerBoundary", () => {
     // No pi-permission-system sentinel set.
     setPermissionSystemSentinel(false);
 
+    const manifest = JSON.parse(readFileSync(join(tmpDir, "pi-ship.json"), "utf8"));
+    const binding = { ...makeMockBinding(tmpDir, manifest) };
+
     const { registerBoundary } = await import("../../../src/boundary/integration/register.js");
     const { ApprovalRegistry } = await import("../../../src/core/approval.js");
     const approvalRegistry = new ApprovalRegistry();
     const source = makeCredentialSource({ DATABASE_URL: "postgres://test" });
 
     await expect(
-      registerBoundary(pi as any, tmpDir, source, approvalRegistry),
+      registerBoundary(pi as any, binding, source, approvalRegistry),
     ).rejects.toThrow("requires an active boundary (install pi-permission-system)");
   });
 });

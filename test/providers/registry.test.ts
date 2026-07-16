@@ -1,12 +1,14 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { providerRegistry, createProviderExecution } from "../../src/providers/registry.js";
 import type { RailwayExecution } from "../../src/providers/railway/package.js";
 import type { VercelExecution } from "../../src/providers/vercel/package.js";
 import { railwayProviderPackage } from "../../src/providers/railway/package.js";
 import { buildRailwayPlan } from "../../src/providers/railway/plan.js";
 import { vercelProviderPackage } from "../../src/providers/vercel/package.js";
+import { loadProviderRuntimeBinding } from "../../src/persistence/manifest-store.js";
 import { buildVercelPlan } from "../../src/providers/vercel/plan.js";
+import { loadRailwayCredentials, requireRailwayCredentials } from "../../src/providers/railway/credentials.js";
 
 describe("provider registry", () => {
   it("exacts provider IDs", () => {
@@ -67,8 +69,10 @@ describe("provider registry", () => {
 
     // Also test: createProviderRegistry with truly ambiguous predicates
     const { createProviderRegistry } = await import("../../src/providers/registry.js");
+    const mockProfile = { id: "mock", ship: [], databaseAdditions: [], commands: [] };
     const mockA = {
       id: "mock-a",
+      profile: mockProfile,
       isManifest: () => true,
       isPlan: () => false,
       isState: () => false,
@@ -77,6 +81,7 @@ describe("provider registry", () => {
     };
     const mockB = {
       id: "mock-b",
+      profile: mockProfile,
       isManifest: () => true,
       isPlan: () => false,
       isState: () => false,
@@ -87,6 +92,52 @@ describe("provider registry", () => {
     expect(() => testRegistry.resolveManifest({})).toThrow(
       expect.objectContaining({ code: "E_CONFIG_INVALID" })
     );
+  });
+
+  it("rejects unsafe Vercel semantics during manifest load and startup binding", async () => {
+    const { mkdtemp, writeFile } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+    const manifests = [
+      {
+        version: 2,
+        name: "app",
+        app: { provider: "vercel", config: { projectName: "app", rootDirectory: "../outside" } },
+      },
+      {
+        version: 2,
+        name: "app",
+        app: { provider: "vercel", config: { projectName: "app" } },
+        database: { provider: "external", config: { urlSecretName: "DATABASE_URL" } },
+        secrets: ["OTHER_SECRET"],
+      },
+    ];
+
+    for (const manifest of manifests) {
+      const cwd = await mkdtemp(join(tmpdir(), "pi-ship-vercel-startup-"));
+      await writeFile(join(cwd, "pi-ship.json"), JSON.stringify(manifest));
+      await expect(providerRegistry.loadManifest(cwd)).rejects.toMatchObject({ code: "E_CONFIG_INVALID" });
+      await expect(providerRegistry.loadRuntimeBinding(cwd)).rejects.toMatchObject({ code: "E_CONFIG_INVALID" });
+    }
+  });
+
+  it("keeps valid Vercel manifest unchanged through startup binding", async () => {
+    const { mkdtemp, writeFile } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+    const cwd = await mkdtemp(join(tmpdir(), "pi-ship-vercel-startup-valid-"));
+    const manifest = {
+      version: 2,
+      name: "app",
+      app: { provider: "vercel", config: { projectName: "app", rootDirectory: "apps/web" } },
+      secrets: ["DATABASE_URL"],
+    };
+    await writeFile(join(cwd, "pi-ship.json"), JSON.stringify(manifest));
+    const loaded = await providerRegistry.loadManifest(cwd);
+    const binding = await loadProviderRuntimeBinding(cwd, providerRegistry.packages);
+    expect(loaded.manifest).toEqual(manifest);
+    expect(binding.manifest).toEqual(manifest);
+    expect(binding.package?.id).toBe("vercel");
   });
 
   it("loads state with cross-provider conflict detection", async () => {
@@ -194,6 +245,24 @@ describe("provider registry", () => {
     expect(vercelProviderPackage.conflictMessage.saveStateOverOther).toBe(
       "cannot overwrite V1 state with V2 state"
     );
+  });
+});
+
+describe("Railway execution credentials", () => {
+  it("requires Railway credentials only at execution boundary", () => {
+    const source = { get: () => undefined };
+    expect(loadRailwayCredentials(source)).toEqual({ apiToken: undefined, projectToken: undefined });
+    expect(() => requireRailwayCredentials(source)).toThrow(expect.objectContaining({
+      code: "E_AUTH_MISSING",
+      message: "RAILWAY_API_TOKEN or RAILWAY_TOKEN is required",
+    }));
+  });
+
+  it("accepts RAILWAY_TOKEN as execution credential", () => {
+    expect(requireRailwayCredentials({ get: (name) => name === "RAILWAY_TOKEN" ? "project-token" : undefined })).toMatchObject({
+      apiToken: "project-token",
+      projectToken: "project-token",
+    });
   });
 });
 
@@ -370,5 +439,183 @@ describe("import locality assertions", () => {
         `${file} should not import provider packages`
       );
     }
+  });
+});
+
+describe("command handler drift guard", () => {
+  function makeMockPackage(id: string, cmds: string[]) {
+    return {
+      id,
+      profile: { id, ship: [], databaseAdditions: [], commands: cmds },
+      isManifest: () => false,
+      isPlan: () => false,
+      isState: () => false,
+      defaultState: () => ({}),
+      conflictMessage: { loadStateFromOther: "", saveStateOverOther: "" },
+      registerCommands: (pi: { registerCommand: (name: string, opts: { handler: (...args: unknown[]) => unknown }) => void }) => {
+        for (const cmd of cmds) {
+          pi.registerCommand(cmd, {
+            handler: async () => `executed:${cmd}`,
+          });
+        }
+      },
+    } as never;
+  }
+
+  it("assertIntact called exactly once before original handler", async () => {
+    const { createProviderRegistry } = await import("../../src/providers/registry.js");
+    const assertIntact = vi.fn().mockResolvedValue(undefined);
+    let recordedHandlers: Record<string, (...args: unknown[]) => unknown> = {};
+    const pi = {
+      registerCommand: (name: string, opts: { handler: (...args: unknown[]) => unknown }) => {
+        recordedHandlers[name] = opts.handler;
+      },
+    };
+    const mockPkg = makeMockPackage("test-pkg", ["greet"]);
+    const reg = createProviderRegistry([mockPkg]);
+    const binding = {
+      cwd: "/test",
+      manifest: undefined,
+      package: mockPkg,
+      profile: { id: "test-pkg", ship: [], databaseAdditions: [], commands: ["greet"] },
+      manifestBytesDigest: undefined,
+      assertIntact,
+    };
+    reg.registerCommands(pi as never, {} as never, () => ({}) as never, binding);
+    expect(Object.keys(recordedHandlers)).toEqual(["greet"]);
+    const result = await recordedHandlers["greet"]("world", { cwd: "/test" });
+    expect(assertIntact).toHaveBeenCalledTimes(1);
+    expect(assertIntact).toHaveBeenCalledWith("/test");
+    expect(result).toBe("executed:greet");
+  });
+
+  it("assertIntact failure prevents original handler", async () => {
+    const { createProviderRegistry } = await import("../../src/providers/registry.js");
+    let originalCalled = false;
+    let capturedHandler: ((...args: unknown[]) => unknown) | undefined;
+    const assertIntact = vi.fn().mockRejectedValue(Object.assign(new Error("drift"), { code: "E_STATE_CONFLICT" }));
+    // Override mockPkg to capture original call
+    const mockPkg = {
+      id: "guard-pkg",
+      profile: { id: "guard-pkg", ship: [], databaseAdditions: [], commands: ["cmd"] },
+      isManifest: () => false,
+      isPlan: () => false,
+      isState: () => false,
+      defaultState: () => ({}),
+      conflictMessage: { loadStateFromOther: "", saveStateOverOther: "" },
+      registerCommands: (pi: { registerCommand: (name: string, opts: { handler: (...args: unknown[]) => unknown }) => void }) => {
+        pi.registerCommand("cmd", {
+          handler: async () => {
+            originalCalled = true;
+            return "original-result";
+          },
+        });
+      },
+    } as never;
+    const pi = {
+      registerCommand: (name: string, opts: { handler: (...args: unknown[]) => unknown }) => {
+        capturedHandler = opts.handler;
+      },
+    };
+    const reg = createProviderRegistry([mockPkg]);
+    const binding = {
+      cwd: "/test",
+      manifest: undefined,
+      package: mockPkg,
+      profile: { id: "guard-pkg", ship: [], databaseAdditions: [], commands: ["cmd"] },
+      manifestBytesDigest: undefined,
+      assertIntact,
+    };
+    reg.registerCommands(pi as never, {} as never, () => ({}) as never, binding);
+    await expect(capturedHandler!("arg", { cwd: "/test" })).rejects.toMatchObject({ code: "E_STATE_CONFLICT" });
+    expect(assertIntact).toHaveBeenCalledTimes(1);
+    expect(originalCalled).toBe(false);
+  });
+
+  it("binding-backed services.loadManifest returns cached manifest after on-disk mutation (TOCTOU)", async () => {
+    const { createProviderRegistry } = await import("../../src/providers/registry.js");
+    const assertIntact = vi.fn().mockResolvedValue(undefined);
+    const startupManifest = { provider: "test-pkg", name: "startup", project: "x", run: { command: ["echo"] } };
+    const mutatedManifest = { provider: "test-pkg", name: "mutated", project: "x", run: { command: ["echo"] } };
+
+    let capturedServices: { loadManifest: () => Promise<unknown> } | undefined;
+    let recordedHandlers: Record<string, (...args: unknown[]) => unknown> = {};
+    const mockPkg = {
+      id: "test-pkg",
+      profile: { id: "test-pkg", ship: [], databaseAdditions: [], commands: ["cmd"] },
+      isManifest: () => false,
+      isPlan: () => false,
+      isState: () => false,
+      defaultState: () => ({}),
+      conflictMessage: { loadStateFromOther: "", saveStateOverOther: "" },
+      registerCommands: (pi: { registerCommand: (name: string, opts: { handler: (...args: unknown[]) => unknown }) => void },
+        _registry: unknown,
+        makeServices: (cwd: string) => { loadManifest: () => Promise<unknown> },
+      ) => {
+        capturedServices = makeServices("/test");
+        pi.registerCommand("cmd", {
+          handler: async () => {
+            const manifest = await capturedServices!.loadManifest();
+            return manifest;
+          },
+        });
+      },
+    } as never;
+    const pi = {
+      registerCommand: (name: string, opts: { handler: (...args: unknown[]) => unknown }) => {
+        recordedHandlers[name] = opts.handler;
+      },
+    };
+    const reg = createProviderRegistry([mockPkg]);
+    const binding = {
+      cwd: "/test",
+      manifest: startupManifest,
+      package: mockPkg,
+      profile: { id: "test-pkg", ship: [], databaseAdditions: [], commands: ["cmd"] },
+      manifestBytesDigest: "startup-digest",
+      assertIntact,
+    };
+    reg.registerCommands(pi as never, {} as never, (cwd: string) => reg.services(cwd, binding), binding);
+    // Mutate on-disk manifest (simulated — binding-backed services ignore disk)
+    const result = await recordedHandlers["cmd"]("arg", { cwd: "/test" });
+    expect(result).toEqual(startupManifest);
+    expect(result).not.toEqual(mutatedManifest);
+    expect(assertIntact).toHaveBeenCalledTimes(1);
+  });
+
+  it("undeclared command registration rejects even with empty commands profile", async () => {
+    const { createProviderRegistry } = await import("../../src/providers/registry.js");
+    const assertIntact = vi.fn();
+    const pi = {
+      registerCommand: () => { throw new Error("should not reach"); },
+    };
+    const mockPkg = {
+      id: "empty-pkg",
+      profile: { id: "empty-pkg", ship: [], databaseAdditions: [], commands: ["cmd"] },
+      isManifest: () => false,
+      isPlan: () => false,
+      isState: () => false,
+      defaultState: () => ({}),
+      conflictMessage: { loadStateFromOther: "", saveStateOverOther: "" },
+      registerCommands: (pi: { registerCommand: (name: string, opts: unknown) => void }) => {
+        // Even though the package declares "cmd", the binding profile says empty → blocked
+        pi.registerCommand("cmd", { handler: async () => "x" });
+      },
+    } as never;
+    const reg = createProviderRegistry([mockPkg]);
+    const binding = {
+      cwd: "/test",
+      manifest: undefined,
+      package: mockPkg,
+      profile: { id: "empty-pkg", ship: [], databaseAdditions: [], commands: [] as string[] },
+      manifestBytesDigest: undefined,
+      assertIntact,
+    };
+    // registerCommands should throw because wrapCommandAPI rejects undeclared name
+    expect(() => reg.registerCommands(pi as never, {} as never, () => ({}) as never, binding)).toThrow(
+      expect.objectContaining({ code: "E_CONFIG_INVALID" })
+    );
+    // assertIntact should never be called since registration itself fails
+    expect(assertIntact).not.toHaveBeenCalled();
   });
 });

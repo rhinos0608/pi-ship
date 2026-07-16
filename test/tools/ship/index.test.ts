@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { shipSchema, type ShipInput } from "../../../src/tools/ship/schema.js";
 import { DBSchema, type DBInput } from "../../../src/tools/db/schema.js";
@@ -38,6 +39,35 @@ describe("shipSchema", () => {
 
   it("rejects logs without integer lines", () => {
     expect(Value.Check(shipSchema, { action: "logs", lines: "abc" })).toBe(false);
+  });
+
+  it("public shipSchema accepts production plan with optional previewId (legacy compat)", () => {
+    expect(Value.Check(shipSchema, { action: "plan", environment: "production", previewId: "pr-7" })).toBe(true);
+    expect(Value.Check(shipSchema, { action: "plan", environment: "preview", previewId: "pr-7" })).toBe(true);
+  });
+
+  it("Vercel composed schema rejects previewId on production plan", async () => {
+    const { composeShipSchema } = await import("../../../src/tools/ship/schema.js");
+    const { vercelCapabilityProfile } = await import("../../../src/providers/capability-profile.js");
+    const vercelShip = composeShipSchema(vercelCapabilityProfile.ship);
+    expect(Value.Check(vercelShip, { action: "plan", environment: "production", previewId: "pr-7" })).toBe(false);
+    expect(Value.Check(vercelShip, { action: "plan", environment: "production" })).toBe(true);
+  });
+
+  it("Cloudflare composed schema rejects previewId on production plan", async () => {
+    const { composeShipSchema } = await import("../../../src/tools/ship/schema.js");
+    const { cloudflareCapabilityProfile } = await import("../../../src/providers/capability-profile.js");
+    const cfShip = composeShipSchema(cloudflareCapabilityProfile.ship);
+    expect(Value.Check(cfShip, { action: "plan", environment: "production", previewId: "pr-7" })).toBe(false);
+    expect(Value.Check(cfShip, { action: "plan", environment: "production" })).toBe(true);
+  });
+
+  it("Railway composed schema still requires previewId for preview", async () => {
+    const { composeShipSchema } = await import("../../../src/tools/ship/schema.js");
+    const { railwayCapabilityProfile } = await import("../../../src/providers/capability-profile.js");
+    const railShip = composeShipSchema(railwayCapabilityProfile.ship);
+    expect(Value.Check(railShip, { action: "plan", environment: "preview" })).toBe(false);
+    expect(Value.Check(railShip, { action: "plan", environment: "preview", previewId: "pr-7" })).toBe(true);
   });
 });
 
@@ -558,6 +588,187 @@ describe("ship tool registration", () => {
     expect(() =>
       executeApprovedOperation(mockVault as any, { provider: "unknown" } as any, () => "x")
     ).toThrow(/no boundary resource/);
+  });
+
+  it("legacy registerShip without binding uses broad shipSchema", async () => {
+    const calls: { name: string; def: { parameters: unknown } }[] = [];
+    const pi = { registerTool: (def: { name: string; parameters: unknown }) => calls.push({ name: def.name, def: def as { parameters: unknown } }) };
+    const { registerShip } = await import("../../../src/tools/ship/index.js");
+    const { ApprovalRegistry } = await import("../../../src/core/approval.js");
+    registerShip(pi as never, new ApprovalRegistry(cwd));
+    expect(calls[0]?.name).toBe("ship");
+    expect(calls[0]?.def.parameters).toBe(shipSchema);
+  });
+
+  it("bound registerShip uses narrow schema from deps.parameters", async () => {
+    const narrowSchema = Type.Object({ action: Type.Literal("validate") });
+    const mockBinding = {
+      cwd: "/test",
+      manifest: { name: "x", provider: "railway", project: "x", run: { command: ["echo"] } },
+      package: { id: "railway" },
+      profile: { ship: [], databaseAdditions: [], commands: [] as string[], boundaryResource: "railway-deployment" },
+      manifestBytesDigest: "abc",
+      assertIntact: async () => {},
+    };
+    const calls: { name: string; parameters: unknown }[] = [];
+    const pi = { registerTool: (def: any) => calls.push({ name: def.name, parameters: def.parameters }) };
+    const { registerShip } = await import("../../../src/tools/ship/index.js");
+    const { ApprovalRegistry } = await import("../../../src/core/approval.js");
+    registerShip(pi as any, new ApprovalRegistry(cwd), {
+      binding: mockBinding as any,
+      parameters: narrowSchema as any,
+    });
+    expect(calls[0]?.parameters).toBe(narrowSchema);
+    expect(calls[0]?.parameters).not.toBe(shipSchema);
+  });
+
+  it("bound registerShip calls assertIntact exactly once before dispatch", async () => {
+    let assertIntactCallCount = 0;
+    const mockBinding = {
+      cwd: "/test",
+      manifest: { name: "x", provider: "railway", project: "x", run: { command: ["echo"] } },
+      package: { id: "railway" },
+      profile: { ship: [], databaseAdditions: [], commands: [] as string[], boundaryResource: "railway-deployment" },
+      manifestBytesDigest: "abc",
+      assertIntact: async () => { assertIntactCallCount++; },
+    };
+    const calls: { name: string; execute: (...args: unknown[]) => Promise<unknown> }[] = [];
+    const pi = { registerTool: (def: any) => calls.push(def) };
+    const { registerShip } = await import("../../../src/tools/ship/index.js");
+    const { ApprovalRegistry } = await import("../../../src/core/approval.js");
+    const mockVault = { runTrusted: (fn: any) => fn(), runWithCapability: () => { throw new Error("unexpected"); } };
+    registerShip(pi as any, new ApprovalRegistry(cwd), {
+      binding: mockBinding as any,
+      vault: mockVault as any,
+      credentialSource: { get: () => undefined },
+    });
+    const execute = calls[0].execute;
+    const result = await execute("id", { action: "validate" } as ShipInput, undefined, undefined, { cwd });
+    expect(assertIntactCallCount).toBe(1);
+    expect(result).toBeDefined();
+  });
+
+  it("executeApprovedOperation with explicit resourceOverride uses override not provider map", async () => {
+    const { executeApprovedOperation } = await import("../../../src/tools/ship/index.js");
+    const runWithCapabilityResources: string[] = [];
+    const mockVault = {
+      runWithCapability: (cap: { resource: string }, fn: () => unknown) => {
+        runWithCapabilityResources.push(cap.resource);
+        return fn();
+      },
+    };
+    executeApprovedOperation(
+      mockVault as any,
+      { provider: "cloudflare", planId: "p-1", planDigest: "d-1" },
+      () => "result",
+      "custom-resource",
+    );
+    expect(runWithCapabilityResources).toEqual(["custom-resource"]);
+  });
+
+  it("legacy executeApprovedOperation without resourceOverride falls back to provider map", async () => {
+    const { executeApprovedOperation } = await import("../../../src/tools/ship/index.js");
+    const runWithCapabilityResources: string[] = [];
+    const mockVault = {
+      runWithCapability: (cap: { resource: string }, fn: () => unknown) => {
+        runWithCapabilityResources.push(cap.resource);
+        return fn();
+      },
+    };
+    executeApprovedOperation(
+      mockVault as any,
+      { provider: "cloudflare", planId: "p-1", planDigest: "d-1" },
+      () => "result",
+    );
+    expect(runWithCapabilityResources).toEqual(["cloudflare-deployment"]);
+  });
+
+  it("executeApprovedOperation throws for unknown provider (missing resource fails closed)", async () => {
+    const { executeApprovedOperation } = await import("../../../src/tools/ship/index.js");
+    const mockVault = { runWithCapability: () => { throw new Error("unexpected"); } };
+    expect(() =>
+      executeApprovedOperation(
+        mockVault as any,
+        { provider: "unknown", planId: "p-1", planDigest: "d-1" } as any,
+        () => "result",
+      )
+    ).toThrow(/no boundary resource/);
+  });
+
+  it("bound runApprovedOperation rejects plan provider mismatch with selected package", async () => {
+    // Use a fresh directory with .gitignore so plan files don't taint worktree hash.
+    const mismatchCwd = await mkdtemp(join(tmpdir(), "pi-ship-mismatch-"));
+    try {
+      await promisify(execFile)("git", ["init"], { cwd: mismatchCwd });
+      await promisify(execFile)("git", ["config", "user.email", "t@t.local"], { cwd: mismatchCwd });
+      await promisify(execFile)("git", ["config", "user.name", "T"], { cwd: mismatchCwd });
+      await writeFile(join(mismatchCwd, ".gitignore"), ".pi-ship\n");
+      await writeFile(join(mismatchCwd, "index.js"), "module.exports = {};");
+      await promisify(execFile)("git", ["add", "."], { cwd: mismatchCwd });
+      await promisify(execFile)("git", ["commit", "-m", "init"], { cwd: mismatchCwd });
+      await writeFile(join(mismatchCwd, "pi-ship.json"), JSON.stringify({
+        name: "mismatch-test",
+        provider: "railway",
+        project: "mismatch-test",
+        run: { command: ["node", "server.js"] },
+      }));
+
+      // Step 2: Create a Railway plan on disk (no binding, broad ship).
+      const planCalls: { name: string; execute: (...args: unknown[]) => Promise<unknown> }[] = [];
+      const planPi = { registerTool: (def: any) => planCalls.push(def) };
+      const { registerShip } = await import("../../../src/tools/ship/index.js");
+      const { ApprovalRegistry } = await import("../../../src/core/approval.js");
+      const sharedRegistry = new ApprovalRegistry(mismatchCwd);
+      registerShip(planPi as any, sharedRegistry);
+      const planExecute = planCalls[0].execute;
+      const planResult = await planExecute(
+        "id",
+        { action: "plan", environment: "production" } as ShipInput,
+        undefined,
+        undefined,
+        { cwd: mismatchCwd, hasUI: true, ui: { confirm: async () => true } },
+      ) as any;
+      expect(planResult.details.planId).toBeDefined();
+      expect(planResult.details.planDigest).toBeDefined();
+      const { planId, planDigest } = planResult.details;
+
+      // Step 3: Bound registration with vercel package id (mismatch) + vault.
+      let assertIntactCallCount = 0;
+      const railManifest = { name: "mismatch-test", provider: "railway", project: "mismatch-test", run: { command: ["node", "server.js"] } };
+      const mismatchBinding = {
+        cwd: mismatchCwd,
+        manifest: railManifest,
+        package: { id: "vercel" },
+        profile: { ship: [] as never[], databaseAdditions: [] as never[], commands: [] as string[], boundaryResource: "vercel-deployment" },
+        manifestBytesDigest: "abc",
+        assertIntact: async () => { assertIntactCallCount++; },
+      };
+      const boundCalls: { name: string; execute: (...args: unknown[]) => Promise<unknown> }[] = [];
+      const boundPi = { registerTool: (def: any) => boundCalls.push(def) };
+      const throwVault = {
+        runTrusted: (fn: any) => fn(),
+        runWithCapability: () => { throw new Error("should not reach capability"); },
+      };
+      registerShip(boundPi as any, sharedRegistry, {
+        binding: mismatchBinding as any,
+        vault: throwVault as any,
+        credentialSource: { get: () => undefined },
+      });
+      const boundExecute = boundCalls[0].execute;
+
+      await expect(
+        boundExecute(
+          "id",
+          { action: "apply_plan", planId, planDigest } as ShipInput,
+          undefined,
+          undefined,
+          { cwd: mismatchCwd, hasUI: true, ui: { confirm: async () => true } },
+        ),
+      ).rejects.toMatchObject({ code: "E_CONFIG_INVALID" });
+      expect(assertIntactCallCount).toBe(1);
+    } finally {
+      await rm(mismatchCwd, { recursive: true, force: true });
+    }
   });
 
   it("non-mutating actions work without vault (backward compat)", async () => {

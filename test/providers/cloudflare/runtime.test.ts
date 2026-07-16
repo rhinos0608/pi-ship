@@ -844,6 +844,26 @@ describe("CloudflareRuntime", () => {
       }
     });
 
+    it("forwards requested line cap and redacts secrets", async () => {
+      const { rt } = createRuntimeWithWorkerName("capped-worker");
+      const logsPromise = rt.logs("rel-cap", { lines: 1, secretValues: ["top-secret"] });
+      await Promise.resolve();
+      const ws = mockSockets[0];
+      expect(ws).toBeDefined();
+      ws._open();
+      ws._message(JSON.stringify([
+        { outcome: "ok", scriptName: "capped-worker", eventTimestamp: Date.now(), logs: [{ message: "top-secret", level: "log" }], exceptions: [], event: {} },
+        { outcome: "ok", scriptName: "capped-worker", eventTimestamp: Date.now(), logs: [{ message: "second", level: "log" }], exceptions: [], event: {} },
+      ]));
+      const result = await logsPromise;
+      expect(result.status).toBe("verified");
+      if (result.status === "verified") {
+        expect(result.value).toContain("***");
+        expect(result.value).not.toContain("top-secret");
+        expect(result.value).not.toContain("second");
+      }
+    });
+
     it("tail cleanup on abort", async () => {
       const { rt, fake } = createRuntimeWithWorkerName("abort-worker");
       const ac = new AbortController();

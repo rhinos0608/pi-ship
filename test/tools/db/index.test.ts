@@ -11,6 +11,8 @@ import { registerDB } from "../../../src/tools/db/index.js";
 import { ApprovalRegistry } from "../../../src/core/approval.js";
 import type { DatabaseClient, DatabaseClientFactory } from "../../../src/database/client.js";
 import { appendDatabaseJournal, readDatabaseJournal } from "../../../src/database/journal.js";
+import type { ProviderRuntimeBinding } from "../../../src/providers/capability-profile.js";
+import { localCapabilityProfile } from "../../../src/providers/capability-profile.js";
 
 const environmentSource = { get: (name: string) => name === "PI_SHIP_DATABASE_ENVIRONMENT" ? "development" : undefined };
 const envWithDb = { get: (name: string) => ({ PI_SHIP_DATABASE_ENVIRONMENT: "development", DATABASE_URL: "postgres://user:pass@localhost:5432/test" })[name] };
@@ -56,6 +58,145 @@ describe("DBSchema", () => {
     expect(Value.Check(DBFilterSchema, { column: "id", op: "is_null" })).toBe(true);
     expect(Value.Check(DBFilterSchema, { column: "id", op: "is_null", value: null })).toBe(false);
     expect(Value.Check(DBOrderSchema, { column: "id", direction: "asc", extra: true })).toBe(false);
+  });
+
+  describe("drift guard with binding", () => {
+    let cwdB: string;
+    let stubClient: DatabaseClient;
+    beforeEach(async () => {
+      cwdB = await mkdtemp(join(tmpdir(), "pi-ship-dbguard-"));
+      await promisify(execFile)("git", ["init"], { cwd: cwdB });
+      await promisify(execFile)("git", ["config", "user.email", "t@t.local"], { cwd: cwdB });
+      await promisify(execFile)("git", ["config", "user.name", "T"], { cwd: cwdB });
+      await writeFile(join(cwdB, "x"), "y");
+      await promisify(execFile)("git", ["add", "."], { cwd: cwdB });
+      await promisify(execFile)("git", ["commit", "-m", "init"], { cwd: cwdB });
+      await writeFile(join(cwdB, "pi-ship.json"), JSON.stringify({
+        name: "guard-test", provider: "railway", project: "guard-test",
+        run: { command: ["node", "server.js"] }, db: { migrate: { command: ["npx", "prisma", "migrate", "deploy"] } },
+      }));
+      stubClient = makeStubClient();
+    });
+    afterEach(async () => { await rm(cwdB, { recursive: true, force: true }); });
+
+    function makeGuardBinding(assertIntactImpl?: () => Promise<void>): ProviderRuntimeBinding {
+      return {
+        cwd: cwdB,
+        manifest: { provider: "railway" },
+        package: undefined,
+        profile: localCapabilityProfile,
+        manifestBytesDigest: "mock-digest",
+        assertIntact: assertIntactImpl ?? (async () => {}),
+      };
+    }
+
+    it("calls assertIntact for inspect action (shared read) when binding present", async () => {
+      const assertIntact = vi.fn().mockResolvedValue(undefined);
+      const binding = makeGuardBinding(assertIntact);
+      let execute: ((...args: unknown[]) => Promise<unknown>) | undefined;
+      registerDB({ registerTool(def: { execute: (...args: unknown[]) => Promise<unknown> }) { execute = def.execute; } } as never, new ApprovalRegistry(cwdB), {
+        credentialSource: envWithDb,
+        clientFactory: () => stubClient,
+        binding,
+      });
+      await execute!("id", { action: "inspect" }, undefined, undefined, { cwd: cwdB });
+      expect(assertIntact).toHaveBeenCalledTimes(1);
+      expect(assertIntact).toHaveBeenCalledWith(cwdB);
+    });
+
+    it("calls assertIntact for query action (shared read) when binding present", async () => {
+      const assertIntact = vi.fn().mockResolvedValue(undefined);
+      const binding = makeGuardBinding(assertIntact);
+      let execute: ((...args: unknown[]) => Promise<unknown>) | undefined;
+      registerDB({ registerTool(def: { execute: (...args: unknown[]) => Promise<unknown> }) { execute = def.execute; } } as never, new ApprovalRegistry(cwdB), {
+        credentialSource: envWithDb,
+        clientFactory: () => stubClient,
+        binding,
+      });
+      await execute!("id", { action: "query", sql: "select 1" }, undefined, undefined, { cwd: cwdB });
+      expect(assertIntact).toHaveBeenCalledTimes(1);
+    });
+
+    it("calls assertIntact for plan action when binding present", async () => {
+      const assertIntact = vi.fn().mockResolvedValue(undefined);
+      const binding = makeGuardBinding(assertIntact);
+      let execute: ((...args: unknown[]) => Promise<unknown>) | undefined;
+      registerDB({ registerTool(def: { execute: (...args: unknown[]) => Promise<unknown> }) { execute = def.execute; } } as never, new ApprovalRegistry(cwdB), {
+        credentialSource: envWithDb,
+        clientFactory: () => stubClient,
+        binding,
+      });
+      await expect(execute!("id", { action: "plan", sql: "select 1" }, undefined, undefined, { cwd: cwdB })).rejects.toThrow();
+      expect(assertIntact).toHaveBeenCalledTimes(1);
+    });
+
+    it("assertIntact failure before handler for any action", async () => {
+      const assertIntact = vi.fn().mockRejectedValue(Object.assign(new Error("drift"), { code: "E_STATE_CONFLICT" }));
+      const binding = makeGuardBinding(assertIntact);
+      let execute: ((...args: unknown[]) => Promise<unknown>) | undefined;
+      registerDB({ registerTool(def: { execute: (...args: unknown[]) => Promise<unknown> }) { execute = def.execute; } } as never, new ApprovalRegistry(cwdB), {
+        credentialSource: envWithDb,
+        clientFactory: () => stubClient,
+        binding,
+      });
+      await expect(execute!("id", { action: "inspect" }, undefined, undefined, { cwd: cwdB })).rejects.toMatchObject({ code: "E_STATE_CONFLICT" });
+    });
+
+    it("assertIntact not called when no binding provided (legacy compat)", async () => {
+      const assertIntact = vi.fn();
+      let execute: ((...args: unknown[]) => Promise<unknown>) | undefined;
+      registerDB({ registerTool(def: { execute: (...args: unknown[]) => Promise<unknown> }) { execute = def.execute; } } as never, new ApprovalRegistry(cwdB), {
+        credentialSource: envWithDb,
+        clientFactory: () => stubClient,
+        // No binding - legacy mode
+      });
+      await execute!("id", { action: "inspect" }, undefined, undefined, { cwd: cwdB });
+      expect(assertIntact).not.toHaveBeenCalled();
+    });
+
+    it("assertIntact called exactly once for provider-dispatched action (plan_migration)", async () => {
+      const assertIntact = vi.fn().mockResolvedValue(undefined);
+      const binding: ProviderRuntimeBinding = {
+        cwd: cwdB,
+        manifest: {
+          name: "guard-test", provider: "railway", project: "guard-test",
+          run: { command: ["node", "server.js"] },
+          db: { migrate: { command: ["npx", "prisma", "migrate", "deploy"] } },
+        },
+        package: { id: "railway" } as never,
+        profile: localCapabilityProfile,
+        manifestBytesDigest: "mock",
+        assertIntact,
+      };
+      let execute: ((...args: unknown[]) => Promise<unknown>) | undefined;
+      registerDB({ registerTool(def: { execute: (...args: unknown[]) => Promise<unknown> }) { execute = def.execute; } } as never, new ApprovalRegistry(cwdB), {
+        credentialSource: envWithDb,
+        clientFactory: () => stubClient,
+        binding,
+      });
+      const result = await execute!("id", { action: "plan_migration" }, undefined, undefined, { cwd: cwdB }) as ToolResult;
+      expect(assertIntact).toHaveBeenCalledTimes(1);
+      expect(assertIntact).toHaveBeenCalledWith(cwdB);
+      expect(result).toMatchObject({
+        content: [{ text: expect.stringContaining("Migration plan") }],
+      });
+    });
+
+    it("assertIntact runs before parameter validation — guard error wins over invalid params", async () => {
+      // assertIntact throws E_STATE_CONFLICT; params are invalid (empty sql).
+      // Guard must execute first and its error must win (not E_CONFIG_INVALID).
+      const assertIntact = vi.fn().mockRejectedValue(Object.assign(new Error("drift detected"), { code: "E_STATE_CONFLICT" }));
+      const binding = makeGuardBinding(assertIntact);
+      let execute: ((...args: unknown[]) => Promise<unknown>) | undefined;
+      registerDB({ registerTool(def: { execute: (...args: unknown[]) => Promise<unknown> }) { execute = def.execute; } } as never, new ApprovalRegistry(cwdB), {
+        credentialSource: envWithDb,
+        clientFactory: () => stubClient,
+        binding,
+      });
+      // Empty sql is invalid — would throw E_CONFIG_INVALID if guard didn't run first.
+      await expect(execute!("id", { action: "plan", sql: "" }, undefined, undefined, { cwd: cwdB })).rejects.toMatchObject({ code: "E_STATE_CONFLICT" });
+      expect(assertIntact).toHaveBeenCalledTimes(1);
+    });
   });
 });
 

@@ -280,7 +280,7 @@ describe("applyNeonPlan", () => {
       ctx.plan = previewPlan;
       ctx.suppliedDigest = previewPlan.planDigest;
       ctx.registry.approve(previewPlan.planId, previewPlan.planDigest, ctx.cwd, { domain: "database", risk: "destructive" });
-      await expect(applyNeonPlan(ctx)).rejects.toMatchObject({ code: "E_PRECONDITION" });
+      await expect(applyNeonPlan(ctx)).rejects.toMatchObject({ code: "E_STATE_CONFLICT" });
     });
   });
 
@@ -380,7 +380,7 @@ describe("applyNeonPlan", () => {
         planId: "rb-apply-1",
         createdAt: new Date().toISOString(),
         restoreTimestamp: "2026-01-10T12:00:00.000Z",
-        sourceBranchId: "br-source",
+        sourceBranchId: "br-1",
         targetBranchId: "br-1",
       });
       registry.approve(rbPlan.planId, rbPlan.planDigest, cwd, { domain: "database", risk: "destructive" });
@@ -416,7 +416,7 @@ describe("applyNeonPlan", () => {
       // targetBranchId comes from state.branchIds["production"] (provisioned branch "br-1")
       expect(branchId).toBe("br-1");
       expect(params.sourceTimestamp).toBe("2026-01-10T12:00:00.000Z");
-      expect(params.sourceBranchId).toBe("br-source");
+      expect(params.sourceBranchId).toBe("br-1");
       expect(params.preserveUnderName).toBeDefined();
       expect(params.preserveUnderName).toMatch(/^test-project_old_/);
     });
