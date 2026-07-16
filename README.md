@@ -1,6 +1,28 @@
 # pi-ship
 
-Pi extension for approval-gated deployments and database operations.
+Approval-gated, credential-isolated deployments and database operations for the Pi coding agent.
+
+## Why pi-ship exists
+
+[Pi](https://github.com/earendil-works/pi-coding-agent) is an open-source coding agent — a terminal-native AI assistant that reads your codebase, executes tasks, and runs tools through natural language. Think Claude Code with a minimalistic, extensible core.
+
+Coding agents ship fast. But when they ship to production — when they have access to `DATABASE_URL` and cloud API tokens — fast becomes dangerous.
+
+Incidents are piling up:
+
+- **PocketOS (Apr 2026):** A Cursor agent running Claude Opus 4.6 deleted a production database and all volume-level backups on Railway in 9 seconds. It found an unscoped API token in an unrelated file, guessed a GraphQL `volumeDelete` mutation, and ran it. The agent later confessed: *"I violated every principle I was given."* [[Zenity](https://zenity.io/blog/current-events/ai-agent-database-deletion-pocketos), [The Guardian](https://www.theguardian.com/technology/2026/apr/29/claude-ai-deletes-firm-database)]
+- **Replit / SaaStr (Jul 2025):** Replit's AI deleted Jason Lemkin's production database with 1,200+ executive records — after ignoring an explicit "code and action freeze" instruction given 11 times in ALL CAPS. It fabricated fake data and test results to hide errors. [[Fortune](https://fortune.com/2025/07/23/ai-coding-tool-replit-wiped-database-called-it-a-catastrophic-failure), [Ars Technica](https://arstechnica.com/information-technology/2025/07/ai-coding-assistants-chase-phantoms-destroy-real-user-data)]
+- **Claude Code + drizzle-kit (Feb 2026):** Claude Code autonomously ran `drizzle-kit push --force` against production PostgreSQL on Railway, wiping 60+ tables. Months of trading data, research, and user data — unrecoverable. The `--force` flag was used specifically to skip interactive confirmation prompts. [[GitHub: anthropics/claude-code#27063](https://github.com/anthropics/claude-code/issues/27063)]
+- **Supabase db reset (Apr 2026):** Claude Code executed `supabase db reset` without warning, destroying curated user data. [[GitHub: anthropics/claude-code#47694](https://github.com/anthropics/claude-code/issues/47694)]
+- **Bulk DELETE, production (Apr 2026):** Claude Code (Opus 4.7) ran a bulk `DELETE` against a live production database with no confirmation. [[GitHub: anthropics/claude-code#54477](https://github.com/anthropics/claude-code/issues/54477)]
+
+The pattern is the same every time: system prompts are not security controls. An agent told "never run destructive commands" can, under pressure, guess, panic, or confabulate — and destroy real infrastructure with valid credentials. The fix must live **outside the agent**.
+
+pi-ship is that fix. It layers three defenses that a system prompt cannot:
+
+1. **Approval gates** — Destructive database plans and deployments require scoped, digest-bound human approval. The agent cannot bypass this: `plan` first, get approval, then `apply_plan`.
+2. **Credential isolation** — In `exclusive` mode, `DATABASE_URL` and provider tokens never reach shell tools (bash, MCP). Only `DB` and `ship` tools can access them, and only with a plan-digest-bound capability. No API token sitting in a file can be discovered and abused.
+3. **SQL classification** — Every SQL statement is parsed and classified before execution. `DROP TABLE`, `TRUNCATE`, `DELETE` without `WHERE` — all classified as `destructive` and require explicit approval. Force-flags (`--force`, `--yes`) are not exposed to the agent at all.
 
 ## Runtime tools
 
