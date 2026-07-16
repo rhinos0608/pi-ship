@@ -110,9 +110,43 @@ export async function inspectSQLite(
   // ── Schemas (just "main") ──────────────────────────────────────
   const schemas: InspectResult["schemas"] = [{ name: "main", owner: undefined }];
 
+  // ── Triggers from sqlite_master ────────────────────────────────
+  const triggerResult = await client.query(
+    "SELECT name, tbl_name AS table_name, sql FROM sqlite_master WHERE type = 'trigger' ORDER BY name LIMIT ?",
+    [CATEGORY_LIMIT + 1],
+  );
+  function parseTriggerTiming(sql: string): string {
+    const u = sql.toUpperCase();
+    if (u.includes("INSTEAD OF")) return "INSTEAD OF";
+    if (u.includes("BEFORE")) return "BEFORE";
+    if (u.includes("AFTER")) return "AFTER";
+    return "BEFORE";
+  }
+  function parseTriggerEvents(sql: string): string[] {
+    const events: string[] = [];
+    const u = sql.toUpperCase();
+    if (u.includes("INSERT")) events.push("INSERT");
+    if (u.includes("UPDATE")) events.push("UPDATE");
+    if (u.includes("DELETE")) events.push("DELETE");
+    return events.length ? events : ["UPDATE"];
+  }
+  const triggers: InspectResult["triggers"] = (triggerResult.rows ?? []).map(
+    (r: Record<string, unknown>) => {
+      const sqlText = r.sql ? String(r.sql) : "";
+      return {
+        schema: "main",
+        table: String(r.table_name ?? ""),
+        name: String(r.name ?? ""),
+        timing: parseTriggerTiming(sqlText),
+        events: parseTriggerEvents(sqlText),
+        row: true, // SQLite only supports FOR EACH ROW
+        enabled: true,
+      };
+    },
+  );
+
   // ── PG-only empty categories ───────────────────────────────────
   const enums: InspectResult["enums"] = [];
-  const triggers: InspectResult["triggers"] = [];
   const policies: InspectResult["policies"] = [];
 
   const result: InspectResult = {

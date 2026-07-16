@@ -78,27 +78,37 @@ function collectTables(node: unknown, depth = 0, maxDepth = 20): string[] {
   return [...tables].sort();
 }
 
-/** Count ? parameter placeholders in SQL text. */
-function countQuestionMarks(sql: string): number {
-  // Simple count: every '?' is a parameter placeholder
-  // SQLite only uses ? (not $1 or :name for positional)
+/**
+ * Extract parameter requirements from the SQLite parser AST.
+ * Counts anonymous (?) and numbered (?NNN) positional parameters
+ * for binding array sizing. Named params (:name, @name, $name)
+ * use object binding and don't consume positional array slots.
+ */
+function collectParameters(cmd: unknown): { paramCount: number } {
   let count = 0;
-  let inString = false;
-  let stringChar = "";
-  for (let i = 0; i < sql.length; i++) {
-    const ch = sql[i]!;
-    if (inString) {
-      if (ch === stringChar && sql[i - 1] !== "\\") {
-        inString = false;
+  function walk(value: unknown): void {
+    if (!value || typeof value !== "object") return;
+    if (Array.isArray(value)) {
+      for (const item of value) walk(item);
+      return;
+    }
+    const record = value as Record<string, unknown>;
+    if (record.type === "VariableExpr" && typeof record.name === "string") {
+      const name = record.name as string;
+      if (name === "?") {
+        count++;
+      } else if (/^\?\d+$/.test(name)) {
+        const num = parseInt(name.slice(1), 10);
+        if (num > count) count = num;
       }
-    } else if (ch === "'" || ch === '"') {
-      inString = true;
-      stringChar = ch;
-    } else if (ch === "?") {
-      count++;
+      // Named params (:name, @name, $name) don't consume positional array slots
+    }
+    for (const key of Object.keys(record)) {
+      if (key !== "type") walk(record[key]);
     }
   }
-  return count;
+  walk(cmd);
+  return { paramCount: count };
 }
 
 /**
@@ -142,7 +152,7 @@ function classifyCommand(
       : sql;
   const fp = fingerprint(sqlText);
   const tables = collectTables(cmd);
-  const paramCount = countQuestionMarks(sqlText);
+  const { paramCount } = collectParameters(cmd);
 
   switch (type) {
     case "SelectStmt":
@@ -249,8 +259,8 @@ function classifyCommand(
         | { type: string; objName?: { type: string; text: string } }
         | undefined;
       const pragmaName = nameNode?.objName?.text;
-      // Setting a PRAGMA via = (EqualsPragmaBody) is a write
       const body = record.body as { type?: string } | undefined;
+      // Setting a PRAGMA via = (EqualsPragmaBody) is always a write
       if (body?.type === "EqualsPragmaBody") {
         return {
           tag: "PRAGMA",
@@ -262,7 +272,34 @@ function classifyCommand(
           sqlText,
         };
       }
-      // Reading a PRAGMA — allowlist check
+      // Parenthesized arguments (CallPragmaBody) — only known-read PRAGMAs
+      if (body?.type === "CallPragmaBody") {
+        if (pragmaName && KNOWN_READ_PRAGMAS.has(pragmaName)) {
+          return {
+            tag: "PRAGMA",
+            risk: "read",
+            reasons: [],
+            tables,
+            paramCount,
+            sqlFingerprint: fp,
+            sqlText,
+          };
+        }
+        return {
+          tag: "PRAGMA",
+          risk: "blocked",
+          reasons: [
+            pragmaName
+              ? `unknown/unsafe PRAGMA: ${pragmaName}`
+              : "unknown PRAGMA",
+          ],
+          tables,
+          paramCount,
+          sqlFingerprint: fp,
+          sqlText,
+        };
+      }
+      // Bare PRAGMA (no body) — read if known, else blocked
       if (pragmaName && KNOWN_READ_PRAGMAS.has(pragmaName)) {
         return {
           tag: "PRAGMA",
@@ -403,7 +440,7 @@ export async function classifySQLiteSQL(
     destructiveReasons: statements
       .filter((s) => s.risk === "destructive")
       .flatMap((s) => s.reasons),
-    maxParamRef: accumulatedParamCount,
+    maxParamRef: Math.max(...statements.map((s) => s.paramCount), 0),
   };
 }
 

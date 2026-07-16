@@ -123,12 +123,34 @@ describe("SQLite inspect", () => {
     }
   });
 
-  it("returns empty arrays for PG-only categories", async () => {
+  it("detects triggers from sqlite_master", async () => {
     const { db, client } = await setupTestDb();
     try {
+      // Create a trigger
+      db.exec(`
+        CREATE TRIGGER trg_users_audit AFTER INSERT ON users
+        BEGIN
+          INSERT INTO audit_log(table_name, action) VALUES ('users', 'INSERT');
+        END
+      `);
+      // Ensure the audit_log table exists (trigger references it)
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS audit_log (
+          id INTEGER PRIMARY KEY,
+          table_name TEXT,
+          action TEXT
+        );
+      `);
       const result = await inspectSQLite(client);
+      expect(result.triggers.length).toBeGreaterThanOrEqual(1);
+      const trigger = result.triggers.find((t) => t.name === "trg_users_audit");
+      expect(trigger).toBeTruthy();
+      expect(trigger!.table).toBe("users");
+      expect(trigger!.schema).toBe("main");
+      expect(trigger!.timing).toBe("AFTER");
+      expect(trigger!.events).toContain("INSERT");
+      expect(trigger!.row).toBe(true);
       expect(result.enums).toEqual([]);
-      expect(result.triggers).toEqual([]);
       expect(result.policies).toEqual([]);
     } finally {
       db.close();

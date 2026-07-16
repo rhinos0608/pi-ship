@@ -207,25 +207,26 @@ describe("SQLite browse", () => {
     }
   });
 
-  it("handles offset correctly", async () => {
+  it("handles offset correctly with deterministic ordering", async () => {
     const { client, close } = setupTestDb();
     try {
       const page1 = await executeSQLiteBrowse(client, {
         table: "products",
+        orderBy: [{ column: "id", direction: "asc" }],
         limit: 3,
         offset: 0,
       });
       const page2 = await executeSQLiteBrowse(client, {
         table: "products",
+        orderBy: [{ column: "id", direction: "asc" }],
         limit: 3,
         offset: 3,
       });
-      expect(page1.rows.length).toBeGreaterThanOrEqual(3);
-      expect(page2.rows.length).toBeGreaterThanOrEqual(2);
-      // Ensure different rows (by id)
-      const page1Id = page1.rows[0]!.id;
-      const page2Id = page2.rows[0]!.id;
-      expect(page2Id).not.toBe(page1Id);
+      expect(page1.rows).toHaveLength(3);
+      expect(page2.rows).toHaveLength(2);
+      // Complete ascending ID sequences
+      expect(page1.rows.map((r: any) => r.id)).toEqual([1, 2, 3]);
+      expect(page2.rows.map((r: any) => r.id)).toEqual([4, 5]);
     } finally {
       close();
     }
