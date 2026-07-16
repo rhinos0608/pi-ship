@@ -105,6 +105,38 @@ describe("importData", () => {
     expect(params!.some((p) => typeof p === "string" && p.startsWith("{"))).toBe(true);
   });
 
+  it("preserves null in JSONB-inferred column while stringifying objects", async () => {
+    // First row has an object → column inferred as JSONB.
+    // Second row has null for the same column — must reach serializeValue's value ?? null fallback.
+    const log: { text: string; params?: unknown[] }[] = [];
+    const client: DatabaseClient = {
+      connect: vi.fn(),
+      query: vi.fn(async (text: string, params?: readonly unknown[]) => {
+        log.push({ text, params: params ? [...params] : undefined });
+        return { fields: [], rows: [], rowCount: 1, command: "INSERT" } as DatabaseQueryResult;
+      }),
+      end: vi.fn(),
+    };
+
+    await importData(client, {
+      table: "settings",
+      format: "json",
+      rows: [
+        { name: "theme", payload: { color: "dark" } },
+        { name: "legacy", payload: null },
+      ],
+    });
+
+    const insertCall = log.find((l) => l.text.startsWith("INSERT INTO"));
+    expect(insertCall).toBeTruthy();
+    const params = insertCall!.params!;
+    // Columns: [name, payload]; types: [TEXT, JSONB]
+    // Row 0: name="theme" (TEXT → "theme"), payload={color:"dark"} (JSONB → JSON.stringify)
+    expect(params[1]).toBe(JSON.stringify({ color: "dark" }));
+    // Row 1: name="legacy" (TEXT → "legacy"), payload=null (JSONB → null via value ?? null)
+    expect(params[3]).toBe(null);
+  });
+
   it("rejects invalid table identifier", async () => {
     const client = makeImportClient();
     await expect(
