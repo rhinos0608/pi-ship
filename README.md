@@ -208,8 +208,8 @@ DATABASE_URL=mariadb://user:password@host:3306/dbname
 
 **SQLite** — file path relative to working directory, or `sqlite:` URL:
 ```
-DATABASE_URL=data/app.db                                          # plain path
-DATABASE_URL=sqlite:///data/app.db                                 # sqlite: URL
+DATABASE_URL=data/app.db                                          # relative path
+DATABASE_URL=sqlite:data/app.db                                   # sqlite: URL, also relative
 ```
 
 ### Engine-native parameter style
