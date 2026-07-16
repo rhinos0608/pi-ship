@@ -32,6 +32,8 @@ import { resetLocalDatabase } from "../../database/reset.js";
 import { sqliteAdapter } from "../../database/dialect/sqlite/index.js";
 import { mysqlAdapter } from "../../database/dialect/mysql/index.js";
 import type { DialectApplyInput } from "../../database/dialect/contracts.js";
+import type { TSchema } from "typebox";
+import type { ProviderRuntimeBinding } from "../../providers/capability-profile.js";
 export type { DBFilter, DBInput, DBOrder, DBValue } from "./schema.js";
 export { DBFilterSchema, DBOrderSchema, DBSchema, DBValueSchema } from "./schema.js";
 
@@ -39,7 +41,17 @@ const hash = (value: unknown) => createHash("sha256").update(typeof value === "s
 
 function containsNonFiniteNumber(value: unknown): boolean { if (typeof value === "number") return !Number.isFinite(value); if (Array.isArray(value)) return value.some(containsNonFiniteNumber); if (value && typeof value === "object") return Object.values(value).some(containsNonFiniteNumber); return false; }
 
-async function contextFingerprints(cwd: string): Promise<{ providerFingerprint: string; manifestFingerprint: string }> { try { await access(join(cwd, "pi-ship.json")); } catch (e) { if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e; return { providerFingerprint: hash("none::provider"), manifestFingerprint: hash("none::manifest") }; } const { manifest, packageId } = await providerRegistry.loadManifest(cwd); return { providerFingerprint: hash(packageId), manifestFingerprint: hash(manifest) }; }
+async function contextFingerprints(cwd: string, binding?: ProviderRuntimeBinding): Promise<{ providerFingerprint: string; manifestFingerprint: string }> {
+  if (binding) {
+    if (binding.manifest === undefined) {
+      return { providerFingerprint: hash("none::provider"), manifestFingerprint: hash("none::manifest") };
+    }
+    return {
+      providerFingerprint: hash(binding.package!.id),
+      manifestFingerprint: hash(binding.manifest),
+    };
+  }
+  try { await access(join(cwd, "pi-ship.json")); } catch (e) { if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e; return { providerFingerprint: hash("none::provider"), manifestFingerprint: hash("none::manifest") }; } const { manifest, packageId } = await providerRegistry.loadManifest(cwd); return { providerFingerprint: hash(packageId), manifestFingerprint: hash(manifest) }; }
 
 const pgliteExecutor: DialectMutationExecutor = {
   paramBinding: 'positional-prefix',
@@ -95,18 +107,26 @@ export function registerDB(
     credentialSource?: CredentialSource;
     payloads?: DatabasePayloadRegistry;
     clientFactory?: DatabaseClientFactory;
+    binding?: ProviderRuntimeBinding;
+    parameters?: TSchema;
   } = {},
 ): DatabaseRegistration {
   const payloads = deps.payloads ?? new DatabasePayloadRegistry();
   const clientFactory = deps.clientFactory ?? createDefaultClientFactory();
+  const effectiveSchema = deps.parameters ?? DBSchema;
 
   pi.registerTool({
     name: "DB",
     label: "Database Operations",
     description: "Inspect, query, plan, and apply database operations",
-    parameters: DBSchema,
+    parameters: effectiveSchema,
     async execute(_toolCallId, rawParams, signal, _onUpdate, ctx) {
-      if (!Value.Check(DBSchema, rawParams) || containsNonFiniteNumber(rawParams)) {
+      // ── Drift guard (first dispatch statement) ───────────────────────
+      if (deps.binding) {
+        await deps.binding.assertIntact(ctx.cwd);
+      }
+
+      if (!Value.Check(effectiveSchema, rawParams) || containsNonFiniteNumber(rawParams)) {
         throw err("E_CONFIG_INVALID", "DB parameters invalid");
       }
       const params = rawParams as DBInput;
@@ -395,7 +415,7 @@ export function registerDB(
       // ── Plan action (shared, persisted, no client) ──────────────────
       if (params.action === "plan") {
         const values = params.params ?? [];
-        const fingerprints = await contextFingerprints(cwd);
+        const fingerprints = await contextFingerprints(cwd, deps.binding);
 
         let classification;
         let targetFingerprint: string;
@@ -444,7 +464,7 @@ export function registerDB(
       if (params.action === "apply_plan") {
         const rawPlan = await readPlanFile(cwd, params.planId);
         if (rawPlan && typeof rawPlan === "object" && (rawPlan as Record<string, unknown>).kind === "db-plan/1") {
-          const fingerprints = await contextFingerprints(cwd);
+          const fingerprints = await contextFingerprints(cwd, deps.binding);
           const applyEnvironment = resolveDatabaseEnvironment(credentialSource, target.kind);
           const productionFlag = credentialSource.get("PI_SHIP_ALLOW_PRODUCTION_DB_WRITES");
 
@@ -554,7 +574,16 @@ export function registerDB(
       }
 
       // ── Provider-dispatched actions ─────────────────────────────────
-      const { manifest, packageId } = await providerRegistry.loadManifest(cwd);
+      let manifest: unknown;
+      let packageId: string;
+      if (deps.binding && deps.binding.manifest !== undefined) {
+        manifest = deps.binding.manifest;
+        packageId = deps.binding.package!.id;
+      } else {
+        const loaded = await providerRegistry.loadManifest(cwd);
+        manifest = loaded.manifest;
+        packageId = loaded.packageId;
+      }
       const handlerContext: DatabaseHandlerContext = {
         manifest, cwd, pi, ctx, registry, credentialSource, environment, signal,
         services: providerRegistry.services(cwd),
