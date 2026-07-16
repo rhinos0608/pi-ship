@@ -93,17 +93,24 @@ describe("executeLocalQuery", () => {
     results.set("BEGIN", { fields: [], rows: [], rowCount: 0, command: "BEGIN" });
     results.set("SET LOCAL statement_timeout = '30000ms'", { fields: [], rows: [], rowCount: 0, command: "SET" });
     results.set("SET LOCAL lock_timeout = '5000ms'", { fields: [], rows: [], rowCount: 0, command: "SET" });
-    results.set("INSERT INTO t VALUES (1)", { fields: [], rows: [], rowCount: 1, command: "INSERT" });
-    results.set(" INSERT INTO t VALUES (2)", { fields: [], rows: [], rowCount: 1, command: "INSERT" });
+    results.set("INSERT INTO t VALUES ($1)", { fields: [], rows: [], rowCount: 1, command: "INSERT" });
+    results.set(" INSERT INTO t2 VALUES ($1)", { fields: [], rows: [], rowCount: 1, command: "INSERT" });
     results.set("COMMIT", { fields: [], rows: [], rowCount: 0, command: "COMMIT" });
     const client = makeSpyClient({ queryResults: results });
 
     const result = await executeLocalQuery(
       client,
-      "INSERT INTO t VALUES (1); INSERT INTO t VALUES (2)",
+      "INSERT INTO t VALUES ($1); INSERT INTO t2 VALUES ($1)",
+      [10, 20],
     );
     expect(result.rowCount).toBe(2);
     expect(result.statementCount).toBe(2);
+    // Verify each statement receives its own parameter slice
+    const calls = (client.query as ReturnType<typeof vi.fn>).mock.calls;
+    // Statement 1: params[0:1] = [10]
+    expect(calls[3][1]).toEqual([10]);
+    // Statement 2: params[1:2] = [20]
+    expect(calls[4][1]).toEqual([20]);
   });
 
   it("throws on abort signal before mutation", async () => {

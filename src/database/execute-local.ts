@@ -37,6 +37,9 @@ export async function executeLocalQuery(
   }
 
   if (classification.riskLevel === "read") {
+    if (classification.statements.length !== 1) {
+      throw err("E_CONFIG_INVALID", "multi-statement read queries are not supported; send one SELECT at a time");
+    }
     // Use existing cursor read path. Provide a factory that returns this client
     // (executeReadQuery calls connect() which is a no-op for PGlite).
     const factory: DatabaseClientFactory = () => client;
@@ -67,9 +70,11 @@ export async function executeLocalQuery(
     await client.query("SET LOCAL statement_timeout = '30000ms'");
     await client.query("SET LOCAL lock_timeout = '5000ms'");
 
+    let paramOffset = 0;
     for (const stmt of classification.statements) {
       checkAborted(signal);
-      const boundParams = params.slice(0, stmt.paramCount);
+      const boundParams = params.slice(paramOffset, paramOffset + stmt.paramCount);
+      paramOffset += stmt.paramCount;
       const result = await client.query(stmt.sql, boundParams);
       if (result.rowCount !== null) totalAffected += result.rowCount;
     }

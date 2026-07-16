@@ -486,7 +486,8 @@ export async function classifySQL(sql: string, params: readonly unknown[] = []):
   }
 
   const maxParamRef = allParams.size ? Math.max(...allParams) : 0;
-  if (params.length !== maxParamRef) {
+  const accumulatedParamCount = statements.reduce((sum, s) => sum + s.paramCount, 0);
+  if (params.length !== accumulatedParamCount) {
     throw err("E_CONFIG_INVALID", "SQL parameters must exactly match references");
   }
 
