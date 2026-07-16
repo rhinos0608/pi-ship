@@ -4,15 +4,17 @@ Pi extension for approval-gated deployments and database operations.
 
 ## Runtime tools
 
-Two tools are registered:
+### `DB` — database operations (always registered)
 
-### `ship` — deployment lifecycle
+Available with zero configuration. Actions: `inspect`, `browse`, `query`, `plan`, `apply_plan`, `import`, `reset`, `migration_status`.
+
+When `DATABASE_URL` is absent, DB falls back to an embedded PGlite instance — see [Local database](#local-database-zero-config).
+
+### `ship` — deployment lifecycle (requires manifest)
+
+Registered only when a `pi-ship.json` manifest exists in the project directory. Without a manifest, pi-ship operates in local-only mode: DB tool is available but ship and provider slash commands are not.
 
 Actions: `validate`, `plan`, `apply_plan`, `status`, `logs`.
-
-### `DB` — database operations
-
-Actions: `inspect`, `browse`, `query`, `plan`, `apply_plan`, `plan_migration`, `migration_status`.
 
 ## DB actions
 
@@ -25,7 +27,7 @@ Actions: `inspect`, `browse`, `query`, `plan`, `apply_plan`, `plan_migration`, `
 | `apply_plan` (`db-plan/1`) | Apply a shared database plan | Yes (remote) / No (local)¹ | No | Yes (write) |
 | `apply_plan` (provider plan) | Apply a provider migration plan | No | Yes | No |
 | `plan_migration` | Create a Railway migration plan | No | Yes (Railway) | No |
-| `migration_status` | Show migration status | No | Yes (Railway) | No |
+| `migration_status` | Show migration status (reads database journal) | No | No | No |
 | `import` | Import JSON/CSV into a local table | No | No | Yes (local write) |
 | `reset` | Wipe and recreate the local database | No | No | No |
 

@@ -92,7 +92,7 @@ Deferred. YAGNI — `query` results already return rows, and piped workflows are
 
 ### Positive
 
-- The `DB` tool is fully useful with zero configuration: no `DATABASE_URL`, no `pi-ship.json`, no env vars needed.
+- The `DB` tool is fully useful with zero configuration: no `DATABASE_URL`, no `pi-ship.json`, no env vars needed. The `ship` deployment tool and provider slash commands are not registered when `pi-ship.json` is absent — the extension operates in local-only mode with just the DB tool.
 - All existing remote-target behavior is preserved byte-for-byte — no regression risk for deployed users.
 - No new parser or SQL dialect needed — PGlite is real PostgreSQL.
 - Lazy import keeps cold-start cost at zero for users who never hit the local path.
