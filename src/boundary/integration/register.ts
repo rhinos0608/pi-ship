@@ -1,6 +1,6 @@
 import { isToolCallEventType, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { CredentialSource } from "../../deployment/credentials.js";
-import { DEFAULT_BOUNDARY_CONFIG, loadBoundaryConfig, ProtectedResourceRegistry, createDatabaseResource, createVercelResource, createRailwayResource, createCloudflareResource, createNeonControlPlaneResource, CredentialVault, BoundaryEnforcer, EphemeralKeyStore } from "../index.js";
+import { DEFAULT_BOUNDARY_CONFIG, loadBoundaryConfig, ProtectedResourceRegistry, createDatabaseResource, createVercelResource, createRailwayResource, createCloudflareResource, createNeonControlPlaneResource, CredentialVault, BoundaryEnforcer, EphemeralKeyStore, ReplayStore } from "../index.js";
 import type { ApprovalRegistry } from "../../core/approval.js";
 import type { ProviderRuntimeBinding } from "../../providers/capability-profile.js";
 import { detectPermissionSystem } from "./permission-system.js";
@@ -43,13 +43,15 @@ export async function registerBoundary(
   const isBoundaryActive = permissionSys.active;
 
   const keyStore = new EphemeralKeyStore();
+  const replayStore = new ReplayStore(binding.cwd);
 
   const enforcer = new BoundaryEnforcer(
     config.mode, resources, isBoundaryActive, approvalRegistry, binding.cwd,
     new Map([[keyStore.getPublicKeyId(), keyStore.publicKey]]),
     "pi-ship-child",
+    replayStore,
   );
-  const vault = new CredentialVault(credentialSource, resources, config.mode, approvalRegistry, binding.cwd, keyStore);
+  const vault = new CredentialVault(credentialSource, resources, config.mode, approvalRegistry, binding.cwd, keyStore, enforcer);
 
   // Startup validation — exclusive fails closed if no boundary extension
   enforcer.validateStartup();

@@ -7,5 +7,6 @@ dist/
 .pi-smartread.tags.cache/
 .pi-smartread.embeddings.cache/
 .pi-subagents/
+.smart-edit-undo
 .env
 *.log

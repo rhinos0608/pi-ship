@@ -3,7 +3,9 @@ import type { ProtectedResourceRegistry } from "./resource.js";
 import type { BoundaryCapability, SignedCapability } from "./types.js";
 import type { ApprovalRegistry } from "../core/approval.js";
 import { err } from "../core/errors.js";
-import { validateCapability, verifySignedCapability } from "./capability.js";
+import { validateCapability, verifySignedCapability, verifySignedCapabilityAsync } from "./capability.js";
+import { verifyCapability } from "./crypto.js";
+import type { ReplayStore } from "./replay-store.js";
 import * as crypto from "node:crypto";
 
 export interface ToolCallContext {
@@ -33,6 +35,7 @@ export interface CredentialAccessContext {
 export class BoundaryEnforcer {
   private readonly trustedPublicKeys?: Map<string, crypto.KeyObject>;
   private readonly expectedAudience?: string;
+  private readonly replayStore?: ReplayStore;
 
   constructor(
     private readonly mode: SecurityMode,
@@ -42,9 +45,11 @@ export class BoundaryEnforcer {
     private readonly cwd: string = process.cwd(),
     trustedPublicKeys?: Map<string, crypto.KeyObject>,
     expectedAudience?: string,
+    replayStore?: ReplayStore,
   ) {
     this.trustedPublicKeys = trustedPublicKeys;
     this.expectedAudience = expectedAudience;
+    this.replayStore = replayStore;
   }
 
   /** Validate startup configuration. exclusive mode requires external boundary. */
@@ -104,6 +109,9 @@ export class BoundaryEnforcer {
 
   /** Check if direct credential access should be allowed. */
   checkCredentialAccess(ctx: CredentialAccessContext): BoundaryEnforcementResult {
+    return this.checkCredentialAccessSync(ctx);
+  }
+  private checkCredentialAccessSync(ctx: CredentialAccessContext): BoundaryEnforcementResult {
     if (!this.resources.isCredentialProtected(ctx.credentialName)) {
       return { allowed: true };
     }
@@ -120,16 +128,17 @@ export class BoundaryEnforcer {
         return { allowed: false, reason: "signed capability verification not configured" };
       }
       const signed = cap as SignedCapability;
-      const result = verifySignedCapability(
-        signed,
-        this.trustedPublicKeys,
-        this.expectedAudience,
-      );
-      if (!result.valid) {
-        return { allowed: false, reason: result.reason ?? "signed capability validation failed" };
-      }
+      // 1. Verify signature/expiry/audience without consuming
+      const pk = this.trustedPublicKeys.get(signed.keyId);
+      if (!pk) return { allowed: false, reason: "unknown keyId" };
+      const { signature: _sig, ...claims } = signed as unknown as Record<string, unknown> & { signature: string };
+      if (!verifyCapability(claims as Record<string, unknown>, signed.signature, pk)) return { allowed: false, reason: "invalid signature" };
+      const expiryMs = new Date(signed.expiresAt).getTime();
+      if (Number.isNaN(expiryMs) || !Number.isFinite(expiryMs)) return { allowed: false, reason: "capability expiresAt is not a valid date" };
+      if (expiryMs < Date.now()) return { allowed: false, reason: "capability expired" };
+      if (signed.audience !== this.expectedAudience) return { allowed: false, reason: "audience mismatch" };
 
-      // Verify expected claims
+      // 2. Verify expected claims (context) - do not burn JTI on mismatch
       if (ctx.expectedResource !== undefined && signed.resource !== ctx.expectedResource) {
         return { allowed: false, reason: `signed cap resource mismatch: expected ${ctx.expectedResource}, got ${signed.resource}` };
       }
@@ -152,7 +161,7 @@ export class BoundaryEnforcer {
         return { allowed: false, reason: "signed cap issuer mismatch" };
       }
 
-      // Require matching approval before allowing
+      // 3. Require matching approval before consuming
       if (this.approvalRegistry) {
         const resourceType = ctx.resourceType ?? "database";
         const risk = signed.riskLevel === "read" ? undefined : signed.riskLevel;
@@ -163,6 +172,19 @@ export class BoundaryEnforcer {
         if (!approved) {
           return { allowed: false, reason: "signed capability not approved by approval registry" };
         }
+      }
+
+      // 4. Consume JTI durably (sync) after all validations pass
+      if (this.replayStore) {
+        try {
+          const ok = this.replayStore.consumeSync(signed.jti, expiryMs);
+          if (!ok) return { allowed: false, reason: "jti replay detected" };
+        } catch {
+          return { allowed: false, reason: "replay store unavailable" };
+        }
+      } else {
+        const result = verifySignedCapability(signed, this.trustedPublicKeys, this.expectedAudience, null);
+        if (!result.valid) return { allowed: false, reason: result.reason ?? "signed capability validation failed" };
       }
 
       return { allowed: true };
@@ -205,6 +227,62 @@ export class BoundaryEnforcer {
       return { allowed: false, reason: `${ctx.credentialName} requires approval in exclusive mode (no approval registry configured)` };
     }
 
+    return { allowed: true };
+  }
+
+  async checkCredentialAccessAsync(ctx: CredentialAccessContext): Promise<BoundaryEnforcementResult> {
+    if (!this.resources.isCredentialProtected(ctx.credentialName)) return { allowed: true };
+    if (this.mode === "managed") return { allowed: true };
+    const cap = ctx.capability;
+    if (cap && "signature" in cap) {
+      if (!this.trustedPublicKeys || !this.expectedAudience) return { allowed: false, reason: "signed capability verification not configured" };
+      const signed = cap as SignedCapability;
+      // Verify signature/audience/expiry without consuming JTI; consumption happens after all context checks
+      const pk = this.trustedPublicKeys.get(signed.keyId);
+      if (!pk) return { allowed: false, reason: "unknown keyId" };
+      const { signature: _sig, ...claims } = signed as unknown as Record<string, unknown> & { signature: string };
+      if (!verifyCapability(claims as Record<string, unknown>, signed.signature, pk)) return { allowed: false, reason: "invalid signature" };
+      const expiryMs = new Date(signed.expiresAt).getTime();
+      if (Number.isNaN(expiryMs) || !Number.isFinite(expiryMs)) return { allowed: false, reason: "capability expiresAt is not a valid date" };
+      if (expiryMs < Date.now()) return { allowed: false, reason: "capability expired" };
+      if (signed.audience !== this.expectedAudience) return { allowed: false, reason: "audience mismatch" };
+      if (ctx.expectedResource !== undefined && signed.resource !== ctx.expectedResource) return { allowed: false, reason: `signed cap resource mismatch: expected ${ctx.expectedResource}, got ${signed.resource}` };
+      if (ctx.expectedProjectBinding !== undefined && signed.projectBinding !== ctx.expectedProjectBinding) return { allowed: false, reason: "signed cap projectBinding mismatch" };
+      if (ctx.expectedPlanId !== undefined && signed.planId !== ctx.expectedPlanId) return { allowed: false, reason: "signed cap planId mismatch" };
+      if (ctx.expectedPlanDigest !== undefined && signed.planDigest !== ctx.expectedPlanDigest) return { allowed: false, reason: "signed cap planDigest mismatch" };
+      if (ctx.expectedOperation !== undefined && signed.operation !== ctx.expectedOperation) return { allowed: false, reason: "signed cap operation mismatch" };
+      if (ctx.expectedRisk !== undefined && signed.riskLevel !== ctx.expectedRisk) return { allowed: false, reason: "signed cap riskLevel mismatch" };
+      if (ctx.expectedIssuer !== undefined && signed.issuer !== ctx.expectedIssuer) return { allowed: false, reason: "signed cap issuer mismatch" };
+      if (this.approvalRegistry) {
+        const resourceType = ctx.resourceType ?? "database";
+        const risk = signed.riskLevel === "read" ? undefined : signed.riskLevel;
+        const approved = this.approvalRegistry.isApproved(signed.planId, signed.planDigest, this.cwd, { domain: resourceType === "deployment" ? "deployment" : "database", risk });
+        if (!approved) return { allowed: false, reason: "signed capability not approved by approval registry" };
+      }
+      if (this.replayStore) {
+        try {
+          const ok = await this.replayStore.consume(signed.jti, expiryMs);
+          if (!ok) return { allowed: false, reason: "jti replay detected" };
+        } catch {
+          return { allowed: false, reason: "replay store unavailable" };
+        }
+      } else {
+        const result = await verifySignedCapabilityAsync(signed, this.trustedPublicKeys, this.expectedAudience, null);
+        if (!result.valid) return { allowed: false, reason: result.reason ?? "signed capability validation failed" };
+      }
+      return { allowed: true };
+    }
+    if (this.mode === "warn") return { allowed: true, reason: `warning: ${ctx.credentialName} accessed by ${ctx.caller}` };
+    if (!cap) return { allowed: false, reason: `${ctx.credentialName} requires capability in exclusive mode` };
+    if (this.approvalRegistry) {
+      const resource = this.resources.resourceForCredential(ctx.credentialName);
+      const expiry = new Date(cap.expiresAt).getTime();
+      if (isNaN(expiry)) return { allowed: false, reason: "capability has invalid expiration date" };
+      const result = validateCapability(cap, resource?.name ?? ctx.credentialName, cap.planId, cap.planDigest, this.approvalRegistry, this.cwd, (resource?.type ?? "database") as ResourceType, ctx.operation ?? cap.operation, ctx.risk ?? cap.riskLevel);
+      if (!result.valid) return { allowed: false, reason: result.reason ?? "capability validation failed" };
+    } else {
+      return { allowed: false, reason: `${ctx.credentialName} requires approval in exclusive mode (no approval registry configured)` };
+    }
     return { allowed: true };
   }
 

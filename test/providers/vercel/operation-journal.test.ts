@@ -88,18 +88,21 @@ describe("operation journal contract", () => {
 
 // ── Legacy path migration tests ─────────────────────────────────────────────
 describe("Vercel legacy path migration", () => {
+  type VercelEntry = Extract<OperationJournalEntry, { provider: "vercel" }>;
+  type VercelStartEntry = Extract<VercelEntry, { status: "start" }>;
+  type VercelStartWithoutHash = Omit<VercelStartEntry, "entryHash">;
   /** Helper: build a chain-validated Vercel entry for writing directly to disk. */
   function makeVercelEntry(
-    overrides: Partial<OperationJournalEntry> & { operationId: string; planId: string; planDigest?: string },
+    overrides: Partial<VercelStartWithoutHash> & { operationId: string; planId: string; planDigest?: string },
     previousHash: string | null,
-  ): OperationJournalEntry {
-    const base = {
+  ): VercelStartEntry {
+    const base: VercelStartWithoutHash = {
       version: 2 as const, ts: "2026-01-01T00:00:00.000Z",
       planDigest: "d1", provider: "vercel" as const, domain: "app" as const,
       kind: "deploy" as const, targetFingerprint: "t1", requestFingerprint: "r1",
       expectedStateFingerprint: "s1", attempt: 1, status: "start" as const,
       ...overrides, previousHash,
-    } satisfies Omit<OperationJournalEntry, "entryHash">;
+    };
     const entryHash = computeEntryHash(base);
     return { ...base, entryHash };
   }

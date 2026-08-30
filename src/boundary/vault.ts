@@ -5,11 +5,13 @@ import type { BoundaryCapability, SignedCapability, ResourceType, SecurityMode }
 import { type ApprovalRegistry } from "../core/approval.js";
 import { validateCapability, mintSignedCapability } from "./capability.js";
 import { EphemeralKeyStore } from "./key-store.js";
+import type { BoundaryEnforcer } from "./enforcement.js";
 
 export class CredentialVault {
   private readonly capabilityStore = new AsyncLocalStorage<BoundaryCapability>();
   private readonly trustedStore = new AsyncLocalStorage<boolean>();
   private readonly keyStore?: EphemeralKeyStore;
+  private readonly enforcer?: BoundaryEnforcer;
 
   constructor(
     private readonly source: CredentialSource,
@@ -18,11 +20,13 @@ export class CredentialVault {
     private readonly approvalRegistry?: ApprovalRegistry,
     private readonly cwd: string = process.cwd(),
     keyStore?: EphemeralKeyStore,
+    enforcer?: BoundaryEnforcer,
   ) {
     if (mode === "exclusive" && !approvalRegistry) {
       throw new Error("CredentialVault: approvalRegistry required in exclusive mode");
     }
     this.keyStore = keyStore;
+    this.enforcer = enforcer;
   }
 
   /** Sign a capability using the vault's ephemeral key store. */
@@ -81,22 +85,45 @@ export class CredentialVault {
     if (!effectiveCap && !isTrusted) return undefined;
 
     if (effectiveCap) {
-      // Full validation through approval registry (covers expiry + approval).
-      // Bind credential to owning resource so capability resource mismatch is caught.
-      const owner = this.resources.resourceForCredential(name);
-      const expectedResource = owner?.name ?? effectiveCap.resource;
-      const result = validateCapability(
-        effectiveCap,
-        expectedResource,
-        effectiveCap.planId,
-        effectiveCap.planDigest,
-        this.approvalRegistry!,
-        this.cwd,
-        owner?.type ?? "database",
-        operation ?? effectiveCap.operation,
-        risk ?? effectiveCap.riskLevel,
-      );
-      if (!result.valid) return undefined;
+      // Signed capability path - must go through durable enforcer if available
+      if ("signature" in effectiveCap) {
+        if (!this.enforcer) return undefined;
+        // Require authoritative call-site operation/risk, do not trust signed values
+        if (operation === undefined || risk === undefined) return undefined;
+        const owner = this.resources.resourceForCredential(name);
+        // Derive expected resource from registry, not from signed value
+        const expectedResource = owner?.name;
+        if (!expectedResource) return undefined;
+        const res = this.enforcer.checkCredentialAccess({
+          credentialName: name,
+          caller: "vault",
+          capability: effectiveCap,
+          expectedResource,
+          expectedOperation: operation,
+          expectedRisk: risk,
+          expectedProjectBinding: this.cwd,
+          expectedIssuer: "pi-ship",
+          resourceType: (owner?.type as unknown as ResourceType) ?? "database",
+        });
+        if (!res.allowed) return undefined;
+      } else {
+        // Full validation through approval registry (covers expiry + approval).
+        // Bind credential to owning resource so capability resource mismatch is caught.
+        const owner = this.resources.resourceForCredential(name);
+        const expectedResource = owner?.name ?? effectiveCap.resource;
+        const result = validateCapability(
+          effectiveCap,
+          expectedResource,
+          effectiveCap.planId,
+          effectiveCap.planDigest,
+          this.approvalRegistry!,
+          this.cwd,
+          owner?.type ?? "database",
+          operation ?? effectiveCap.operation,
+          risk ?? effectiveCap.riskLevel,
+        );
+        if (!result.valid) return undefined;
+      }
     }
     // If isTrusted && !effectiveCap: allow (plan/status read path)
 

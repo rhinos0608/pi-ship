@@ -2,7 +2,8 @@ export type { SecurityMode, ProtectedResourceDescriptor, ResourceType, BoundaryC
 export { loadBoundaryConfig, parseSecurityMode, DEFAULT_BOUNDARY_CONFIG } from "./config.js";
 export { createDatabaseResource, createDeploymentResource, createVercelResource, createRailwayResource, createCloudflareResource, createNeonControlPlaneResource, ProtectedResourceRegistry } from "./resource.js";
 export { CredentialVault } from "./vault.js";
-export { mintCapability, validateCapability, mintSignedCapability, verifySignedCapability } from "./capability.js";
+export { mintCapability, validateCapability, mintSignedCapability, verifySignedCapability, verifySignedCapabilityAsync, clearJtiCacheForTests } from "./capability.js";
+export { ReplayStore, replayPath, replayDir, hashJti } from "./replay-store.js";
 export { BoundaryEnforcer } from "./enforcement.js";
 export type { ToolCallContext, CredentialAccessContext } from "./enforcement.js";
 export { detectPermissionSystem } from "./integration/permission-system.js";
