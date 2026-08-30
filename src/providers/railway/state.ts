@@ -21,13 +21,10 @@ const LocalStateSchema = Type.Object({ version: Type.Literal(2), provider: Type.
 export type LocalState = Static<typeof LocalStateSchema>;
 
 export function isRailwayState(value: unknown): value is LocalState {
+  // NOTE: This is a read-only type guard. It does NOT mutate the input.
+  // V1→V2 migration is handled by loadRailwayState which returns a new object.
   if (Value.Check(LocalStateSchema, value)) return true;
-  if (Value.Check(V1LocalStateSchema, value)) {
-    const v1 = value as { version: number; previews?: Record<string, unknown> };
-    v1.version = 2;
-    v1.previews = {};
-    return true;
-  }
+  if (Value.Check(V1LocalStateSchema, value)) return true;
   return false;
 }
 
@@ -41,8 +38,12 @@ export function defaultState(): LocalState { return { version: 2, provider: "rai
 export async function loadRailwayState(cwd: string): Promise<LocalState> {
   const value = await readPersisted(cwd);
   if (value === undefined) return defaultState();
-  if (isRailwayState(value)) return value;
-  throw err("E_CONFIG_INVALID", "state.json has invalid shape");
+  if (!isRailwayState(value)) throw err("E_CONFIG_INVALID", "state.json has invalid shape");
+  // Migrate V1 → V2: return a new object, never mutate the persisted value.
+  if (Value.Check(V1LocalStateSchema, value)) {
+    return { ...(value as Static<typeof V1LocalStateSchema>), version: 2 as const, previews: {} };
+  }
+  return value as LocalState;
 }
 
 /**

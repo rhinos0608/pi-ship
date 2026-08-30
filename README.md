@@ -44,10 +44,14 @@ Available actions depend on the provider profile:
 
 | Profile | Ship actions |
 |---|---|
-| Railway | `validate`, `plan`, `apply_plan`, `status`, `logs`, `rollback` |
-| Vercel | `validate`, `plan`, `apply_plan`, `status`, `logs`, `rollback` |
-| Cloudflare | `validate`, `plan`, `apply_plan`, `status`, `logs`, `rollback` |
-| Neon | `validate`, `plan`, `apply_plan`, `status`, `rollback` (no logs API) |
+| Railway | `validate`, `plan`, `apply_plan`, `status`, `logs` |
+| Vercel | `validate`, `plan`, `apply_plan`, `status`, `logs` |
+| Cloudflare | `validate`, `plan`, `apply_plan`, `status`, `logs` |
+| Neon | `validate`, `plan`, `apply_plan`, `status` (no logs API) |
+
+> Rollback is not a separate action. To roll back, invoke `action: 'plan'` with `intent: 'rollback'`
+> and `targetReleaseId` set to the target release. The plan → approve → apply lifecycle
+> applies the same as a regular deploy. This applies to all provider profiles.
 
 Provider slash commands (`ship-init`, `ship-plan`, `ship-apply`, `ship-status`, `ship-logs`, `ship-rollback`) are registered only for Railway.
 

@@ -13,6 +13,9 @@ import type { ToolResult } from "../../core/types.js";
 import type { NeonState } from "./state.js";
 import { loadNeonState, saveNeonState, redactConnectionUri } from "./state.js";
 
+/** Guards concurrent Neon migrations in the same process (see migrate step). */
+let neonMigrationInProgress = false;
+
 export interface ApplyNeonContext {
   adapter: NeonAdapter;
   manifest: NeonManifest;
@@ -177,18 +180,23 @@ export async function applyNeonPlan(ctx: ApplyNeonContext): Promise<ToolResult> 
           const argv = plan.migrationCommand!;
           // Fetch fresh connection URI (with password) for migration
           const dbUri = await adapter.getConnectionUri(state.projectId!, state.branchIds[branchName], databaseName, roleName, signal);
-          // Credential injection: scoped to subprocess lifetime only.
-          // DATABASE_URL is set in process.env for the duration of piExec
-          // because pi's ExecOptions does not expose child-process env overrides.
-          // This is a known limitation: process.env is process-global, not
-          // isolated per-tool. The boundary layer warns on credential access
-          // in warn/exclusive modes but cannot fully prevent observation.
+          // ── process.env injection ──────────────────────────────────────
+          // piExec does not expose child-process env overrides, so we mutate
+          // process.env.DATABASE_URL for the subprocess lifetime. This is a
+          // known limitation: process.env is process-global and observable by
+          // concurrent operations. The module-level neonMigrationInProgress
+          // guard prevents two concurrent migration env mutations.
+          if (neonMigrationInProgress) {
+            throw err("E_STATE_CONFLICT", "Neon migration already in progress in this process; concurrent migration not supported");
+          }
+          neonMigrationInProgress = true;
           const prevDbUrl = process.env.DATABASE_URL;
           process.env.DATABASE_URL = dbUri;
           let result;
           try {
             result = await piExec(argv[0], argv.slice(1), { cwd, signal });
           } finally {
+            neonMigrationInProgress = false;
             if (prevDbUrl !== undefined) {
               process.env.DATABASE_URL = prevDbUrl;
             } else {

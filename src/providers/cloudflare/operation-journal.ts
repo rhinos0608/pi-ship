@@ -1,5 +1,7 @@
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Type, type Static } from "typebox";
+import { Value } from "typebox/value";
 import {
   createOperationJournal,
   computeEntryHash as genericComputeEntryHash,
@@ -61,15 +63,81 @@ export type OperationJournalEntry = Static<typeof OperationJournalEntrySchema>;
 type WithoutChain<T> = T extends unknown ? Omit<T, "entryHash" | "previousHash"> : never;
 export type NewOperationJournalEntry = WithoutChain<OperationJournalEntry>;
 
+/** Provider-specific journal path (new). */
 function cfPath(cwd: string): string {
+  return join(cwd, ".pi-ship", "cloudflare-operation-journal.jsonl");
+}
+
+/** Legacy shared path (also used by Vercel). */
+function legacyPath(cwd: string): string {
   return join(cwd, ".pi-ship", "operation-journal.jsonl");
 }
 
 const cfJournal = createOperationJournal<OperationJournalEntry>(OperationJournalEntrySchema, cfPath);
 
 export const operationJournalPath = cfJournal.path;
-export const readOperationJournal = cfJournal.read;
 export const appendOperationEntry = cfJournal.append;
+
+/**
+ * Read Cloudflare journal entries from both the new provider-specific path and
+ * the legacy shared path. Entries with matching entryHash are deduplicated.
+ *
+ * The legacy shared file may contain entries from another provider (Vercel).
+ * Only entries with `provider: "cloudflare"` are adopted. The full legacy chain
+ * is validated for integrity before filtering by provider.
+ */
+export async function readOperationJournal(cwd: string, filter?: { planId?: string }): Promise<OperationJournalEntry[]> {
+  // 1. Read new provider-specific path (schema-validated, chain-validated)
+  let newEntries: OperationJournalEntry[];
+  try {
+    newEntries = await cfJournal.read(cwd);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      newEntries = [];
+    } else {
+      throw error;
+    }
+  }
+
+  // 2. Read legacy shared path, filter by provider
+  let legacyEntries: OperationJournalEntry[] = [];
+  try {
+    const legacyRaw = await readFile(legacyPath(cwd), "utf8");
+    const allParsed: unknown[] = [];
+    const chainEntries: Array<{ entryHash: string; previousHash: string | null }> = [];
+    for (const line of legacyRaw.split("\n")) {
+      if (!line.trim()) continue;
+      const parsed = JSON.parse(line);
+      allParsed.push(parsed);
+      chainEntries.push(parsed as { entryHash: string; previousHash: string | null });
+    }
+    // Validate hash chain integrity across ALL legacy entries (both providers)
+    genericValidateHashChain(chainEntries);
+    // Filter by this provider's schema
+    for (const parsed of allParsed) {
+      if (Value.Check(OperationJournalEntrySchema, parsed)) {
+        legacyEntries.push(parsed as OperationJournalEntry);
+      }
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+
+  // 3. Merge and dedupe by entryHash
+  const seen = new Set<string>();
+  const merged: OperationJournalEntry[] = [];
+  for (const entry of [...newEntries, ...legacyEntries]) {
+    if (!seen.has(entry.entryHash)) {
+      seen.add(entry.entryHash);
+      merged.push(entry);
+    }
+  }
+
+  if (filter?.planId) {
+    return merged.filter((entry) => entry.planId === filter.planId);
+  }
+  return merged;
+}
 
 /** Re-exported generic helpers for internal use. */
 export { genericComputeEntryHash as computeEntryHash, genericValidateHashChain as validateHashChain };

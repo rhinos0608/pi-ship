@@ -218,24 +218,27 @@ export class BoundaryEnforcer {
   }
 }
 
-/** Recursively collect all string values from an arbitrary input structure. */
-function collectStringValues(value: unknown): string[] {
+/** Recursively collect all string values from an arbitrary input structure.
+ * @param maxDepth - Maximum recursion depth (default 20). Exceeding this returns current results.
+ */
+function collectStringValues(value: unknown, maxDepth: number = 20): string[] {
   const out: string[] = [];
-  function walk(v: unknown): void {
+  function walk(v: unknown, depth: number): void {
+    if (depth > maxDepth) return;
     if (typeof v === "string") {
       out.push(v);
     } else if (Array.isArray(v)) {
-      for (const item of v) walk(item);
+      for (const item of v) walk(item, depth + 1);
     } else if (v && typeof v === "object") {
       const obj = v as Record<string, unknown>;
       for (const key of Object.keys(obj)) {
         out.push(key);
       }
       for (const val of Object.values(obj)) {
-        walk(val);
+        walk(val, depth + 1);
       }
     }
   }
-  walk(value);
+  walk(value, 0);
   return out;
 }

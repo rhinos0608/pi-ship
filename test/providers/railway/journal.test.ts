@@ -90,3 +90,46 @@ describe("journal", () => {
     await expect(readJournal(tmp, "wanted")).rejects.toMatchObject({ code: "E_STATE_CONFLICT" });
   });
 });
+
+// ── Legacy path migration tests ─────────────────────────────────────────────
+describe("Railway legacy path migration", () => {
+  const LEGACY_PATH = join(".pi-ship", "journal.jsonl");
+
+  it("reads entries from legacy shared path when new provider-specific path does not exist", async () => {
+    await mkdir(join(tmp, ".pi-ship"), { recursive: true });
+
+    // Write Railway entries to legacy path only (no railway-journal.jsonl)
+    await writeFile(
+      join(tmp, LEGACY_PATH),
+      `${JSON.stringify({ ts: "t1", planId: "p1", step: "deploy", status: "start" })}\n` +
+      `${JSON.stringify({ ts: "t2", planId: "p1", step: "deploy", status: "ok", resourceRef: "svc-1" })}\n`,
+      "utf8"
+    );
+
+    const entries = await readJournal(tmp);
+    expect(entries).toHaveLength(2);
+    expect(entries[0].planId).toBe("p1");
+    expect(entries[1].step).toBe("deploy");
+    expect(entries[1].resourceRef).toBe("svc-1");
+  });
+
+  it("throws E_STATE_CONFLICT on mixed-provider legacy file containing Neon entries (fail-closed)", async () => {
+    await mkdir(join(tmp, ".pi-ship"), { recursive: true });
+
+    // Railway entry (no planDigest) + Neon entry (has planDigest — extra field)
+    // Neon entry fails Railway's additionalProperties:false schema → E_STATE_CONFLICT
+    await writeFile(
+      join(tmp, LEGACY_PATH),
+      `${JSON.stringify({ ts: "t1", planId: "p1", step: "deploy", status: "start" })}\n` +
+      `${JSON.stringify({ ts: "t2", planId: "p2", planDigest: "digest-neon", step: "ensureProject", status: "ok" })}\n`,
+      "utf8"
+    );
+
+    await expect(readJournal(tmp)).rejects.toMatchObject({ code: "E_STATE_CONFLICT" });
+  });
+
+  it("returns empty array for fresh install (no files at all)", async () => {
+    const freshTmp = await mkdtemp(join(tmpdir(), "pi-ship-railway-fresh-"));
+    await expect(readJournal(freshTmp)).resolves.toEqual([]);
+  });
+});

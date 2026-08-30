@@ -1,7 +1,7 @@
 {
   "name": "pi-ship",
   "version": "0.1.0",
-  "description": "Pi extension for Railway deployment lifecycle",
+  "description": "Pi extension for multi-provider deployment lifecycle (Railway, Vercel, Cloudflare, Neon) and multi-dialect database management",
   "type": "module",
   "main": "./src/index.ts",
   "files": [

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -83,5 +83,84 @@ describe("operation journal contract", () => {
     lines[0] = JSON.stringify(first);
     await writeFile(path, `${lines.join("\n")}\n`, "utf8");
     await expect(readOperationJournal(cwd, { planId: "p2" })).rejects.toMatchObject({ code: "E_STATE_CONFLICT" });
+  });
+});
+
+// ── Legacy path migration tests ─────────────────────────────────────────────
+describe("Vercel legacy path migration", () => {
+  /** Helper: build a chain-validated Vercel entry for writing directly to disk. */
+  function makeVercelEntry(
+    overrides: Partial<OperationJournalEntry> & { operationId: string; planId: string; planDigest?: string },
+    previousHash: string | null,
+  ): OperationJournalEntry {
+    const base = {
+      version: 2 as const, ts: "2026-01-01T00:00:00.000Z",
+      planDigest: "d1", provider: "vercel" as const, domain: "app" as const,
+      kind: "deploy" as const, targetFingerprint: "t1", requestFingerprint: "r1",
+      expectedStateFingerprint: "s1", attempt: 1, status: "start" as const,
+      ...overrides, previousHash,
+    } satisfies Omit<OperationJournalEntry, "entryHash">;
+    const entryHash = computeEntryHash(base);
+    return { ...base, entryHash };
+  }
+
+  /** Helper: build a chain-validated Cloudflare entry for writing directly to disk. */
+  function makeCloudflareEntry(
+    overrides: Partial<Record<string, unknown>> & { operationId: string; planId: string; planDigest?: string },
+    previousHash: string | null,
+  ): Record<string, unknown> {
+    const base = {
+      version: 1, ts: "2026-01-01T00:00:00.000Z",
+      planDigest: "d2", provider: "cloudflare",
+      kind: "deploy", targetFingerprint: "tf1", requestFingerprint: "rf1",
+      expectedStateFingerprint: "esf1", attempt: 1, status: "start",
+      ...overrides, previousHash,
+    };
+    const entryHash = computeEntryHash(base);
+    return { ...base, entryHash };
+  }
+
+  it("reads entries from legacy shared path when new provider-specific path does not exist", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "pi-ship-vc-legacy-"));
+    await mkdir(join(cwd, ".pi-ship"), { recursive: true });
+
+    const entry1 = makeVercelEntry({ planId: "p1", operationId: "o1" }, null);
+
+    // Write ONLY to legacy path — new path (.pi-ship/vercel-operation-journal.jsonl) absent
+    await writeFile(join(cwd, ".pi-ship", "operation-journal.jsonl"), JSON.stringify(entry1) + "\n", "utf8");
+
+    const entries = await readOperationJournal(cwd);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].planId).toBe("p1");
+    expect(entries[0].operationId).toBe("o1");
+  });
+
+  it("filters own entries from mixed-provider legacy file (Vercel + Cloudflare interleaved)", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "pi-ship-vc-mixed-"));
+    await mkdir(join(cwd, ".pi-ship"), { recursive: true });
+
+    // Entry 1: Vercel
+    const vc1 = makeVercelEntry({ planId: "vc-p1", operationId: "vc-o1" }, null);
+    // Entry 2: Cloudflare (interleaved — chain must be valid across providers)
+    const cf1 = makeCloudflareEntry({ planId: "cf-p1", operationId: "cf-o1" }, vc1.entryHash);
+    // Entry 3: Vercel
+    const vc2 = makeVercelEntry({ planId: "vc-p2", operationId: "vc-o2" }, cf1.entryHash as string);
+
+    await writeFile(
+      join(cwd, ".pi-ship", "operation-journal.jsonl"),
+      [JSON.stringify(vc1), JSON.stringify(cf1), JSON.stringify(vc2)].join("\n") + "\n",
+      "utf8"
+    );
+
+    const entries = await readOperationJournal(cwd);
+    // Vercel reader validates full chain, then filters by Vercel schema only
+    expect(entries).toHaveLength(2);
+    expect(entries.every((e) => e.provider === "vercel")).toBe(true);
+    expect(entries.map((e) => e.planId)).toEqual(["vc-p1", "vc-p2"]);
+  });
+
+  it("returns empty array for fresh install (no legacy or new-path file)", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "pi-ship-vc-fresh-"));
+    await expect(readOperationJournal(cwd)).resolves.toEqual([]);
   });
 });

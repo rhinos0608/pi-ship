@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -143,5 +143,84 @@ describe("Cloudflare operation journal", () => {
     expect(filtered).toHaveLength(2);
     expect(filtered[0].planId).toBe("plan-a");
     expect(filtered[1].planId).toBe("plan-a");
+  });
+});
+
+// ── Legacy path migration tests ─────────────────────────────────────────────
+describe("Cloudflare legacy path migration", () => {
+  const LEGACY_PATH = ".pi-ship/operation-journal.jsonl";
+
+  function makeCloudflareEntry(
+    overrides: Record<string, unknown> & { operationId: string; planId: string },
+    previousHash: string | null,
+  ): Record<string, unknown> {
+    const base = {
+      version: 1, ts: "2026-01-01T00:00:00.000Z", planDigest: "d1",
+      provider: "cloudflare", kind: "deploy",
+      targetFingerprint: "tf1", requestFingerprint: "rf1",
+      expectedStateFingerprint: "esf1", attempt: 1, status: "start",
+      ...overrides, previousHash,
+    };
+    const entryHash = computeEntryHash(base);
+    return { ...base, entryHash };
+  }
+
+  function makeVercelEntry(
+    overrides: Record<string, unknown> & { operationId: string; planId: string },
+    previousHash: string | null,
+  ): Record<string, unknown> {
+    const base = {
+      version: 2, ts: "2026-01-01T00:00:00.000Z", planDigest: "d2",
+      provider: "vercel", domain: "app", kind: "deploy",
+      targetFingerprint: "vt1", requestFingerprint: "vr1",
+      expectedStateFingerprint: "vesf1", attempt: 1, status: "start",
+      ...overrides, previousHash,
+    };
+    const entryHash = computeEntryHash(base);
+    return { ...base, entryHash };
+  }
+
+  it("reads entries from legacy shared path when new provider-specific path does not exist", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "pi-ship-cf-legacy-"));
+    await mkdir(join(cwd, ".pi-ship"), { recursive: true });
+
+    const entry1 = makeCloudflareEntry({ planId: "p1", operationId: "o1" }, null);
+
+    // Write ONLY to legacy path — no new cloudflare-operation-journal.jsonl
+    await writeFile(join(cwd, LEGACY_PATH), JSON.stringify(entry1) + "\n", "utf8");
+
+    const entries = await readOperationJournal(cwd);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].planId).toBe("p1");
+    expect(entries[0].operationId).toBe("o1");
+  });
+
+  it("filters own entries from mixed-provider legacy file (Cloudflare + Vercel interleaved)", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "pi-ship-cf-mixed-"));
+    await mkdir(join(cwd, ".pi-ship"), { recursive: true });
+
+    // Entry 1: Cloudflare
+    const cf1 = makeCloudflareEntry({ planId: "cf-p1", operationId: "cf-o1" }, null);
+    // Entry 2: Vercel (interleaved — chain valid across providers)
+    const vc1 = makeVercelEntry({ planId: "vc-p1", operationId: "vc-o1" }, cf1.entryHash as string);
+    // Entry 3: Cloudflare
+    const cf2 = makeCloudflareEntry({ planId: "cf-p2", operationId: "cf-o2" }, vc1.entryHash as string);
+
+    await writeFile(
+      join(cwd, LEGACY_PATH),
+      [JSON.stringify(cf1), JSON.stringify(vc1), JSON.stringify(cf2)].join("\n") + "\n",
+      "utf8"
+    );
+
+    const entries = await readOperationJournal(cwd);
+    // Cloudflare reader validates full chain, then filters by Cloudflare schema only
+    expect(entries).toHaveLength(2);
+    expect(entries.every((e) => e.provider === "cloudflare")).toBe(true);
+    expect(entries.map((e) => e.planId)).toEqual(["cf-p1", "cf-p2"]);
+  });
+
+  it("returns empty array for fresh install (no legacy or new-path file)", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "pi-ship-cf-fresh-"));
+    await expect(readOperationJournal(cwd)).resolves.toEqual([]);
   });
 });

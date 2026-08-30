@@ -1,3 +1,4 @@
+import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { err, type ShipErrorCode } from "../../core/errors.js";
 import { authorizeCloudflarePlanApply, type CloudflareAuthorizationContext } from "./authorization.js";
 import { appendOperationEntry, readOperationJournal, type NewOperationJournalEntry, type OperationJournalEntry } from "./operation-journal.js";
@@ -44,10 +45,11 @@ function stateStore(ctx: ApplyCloudflarePlanContext) {
 
 export async function applyCloudflarePlan(ctx: ApplyCloudflarePlanContext): Promise<CloudflareState> {
   const store = stateStore(ctx);
-  let state = await store.load();
-  await authorizeCloudflarePlanApply({ ...ctx, state });
-  const runFn = ctx.runAfterAuthorization ?? (<T>(fn: () => T) => fn());
-  return runFn(async () => {
+  return withFileMutationQueue(statePath(ctx.cwd), async () => {
+    let state = await store.load();
+    await authorizeCloudflarePlanApply({ ...ctx, state });
+    const runFn = ctx.runAfterAuthorization ?? (<T>(fn: () => T) => fn());
+    return runFn(async () => {
     const runtime = ctx.createRuntime();
     const secretValues = ctx.loadSecrets();
     await verifyRuntimeAccount(runtime, ctx.plan, ctx.signal);
@@ -77,7 +79,7 @@ export async function applyCloudflarePlan(ctx: ApplyCloudflarePlanContext): Prom
     }
     return state;
   });
-
+  });
 }
 
 // ── Hooks builder ───────────────────────────────────────────────────────────
