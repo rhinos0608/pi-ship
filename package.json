@@ -27,19 +27,19 @@
   "dependencies": {
     "@electric-sql/pglite": "0.5.4",
     "@pgsql/parser": "1.5.0",
-    "mysql2": "3.23.0",
+    "mysql2": "3.24.4",
     "node-sql-parser": "5.4.0",
     "pg": "8.22.0",
     "sqlite3-parser": "^0.7.1"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.80.7",
+    "@earendil-works/pi-coding-agent": "^0.85.1",
     "typebox": "^1.1.38"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "0.80.7",
-    "@earendil-works/pi-coding-agent": "0.80.7",
-    "@earendil-works/pi-tui": "0.80.7",
+    "@earendil-works/pi-ai": "0.85.1",
+    "@earendil-works/pi-coding-agent": "0.85.1",
+    "@earendil-works/pi-tui": "0.85.1",
     "@types/node": "^24.12.4",
     "@types/pg": "8.20.0",
     "typebox": "1.1.38",
