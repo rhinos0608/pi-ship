@@ -90,21 +90,36 @@ describe("durable replay", () => {
     const claimFile = join(replayDir(dir), bucket, hash);
     const barrier = join(dir, "barrier");
     writeFileSync(barrier, "wait");
+    // Pure-JS worker: replicates ReplayStore.consumeHashSync O_EXCL claim
+    // without importing repo TS (portable in CI, no tsx, no absolute path).
     const workerCode = `
-      import { ReplayStore } from "/Users/rhinesharar/pi-ship/src/boundary/replay-store.ts";
-      import { readFileSync } from "node:fs";
+      import { readFileSync, mkdirSync, openSync, writeFileSync, fsyncSync, closeSync, chmodSync } from "node:fs";
+      import { join } from "node:path";
       const dir = ${JSON.stringify(dir)};
-      const jti = ${JSON.stringify(signed.jti)};
+      const hash = ${JSON.stringify(hash)};
       const expiry = ${expiry};
       const barrier = ${JSON.stringify(barrier)};
-      // barrier spin
       while (true) {
         try { readFileSync(barrier); await new Promise(r=>setTimeout(r, 5)); } catch { break; }
       }
-      const rs = new ReplayStore(dir);
+      const base = join(dir, ".pi-ship", "boundary", "replay");
+      const bucketDir = join(base, String(expiry));
       try {
-        const ok = rs.consumeSync(jti, expiry);
-        process.stdout.write(ok ? "ok" : "replay");
+        mkdirSync(bucketDir, { recursive: true, mode: 0o700 });
+        const claimPath = join(bucketDir, hash);
+        let fd;
+        try {
+          fd = openSync(claimPath, "wx", 0o600);
+        } catch (e) {
+          if (e && e.code === "EEXIST") { process.stdout.write("replay"); process.exit(0); }
+          throw e;
+        }
+        try {
+          writeFileSync(fd, String(expiry), { encoding: "utf8" });
+          fsyncSync(fd);
+        } finally { closeSync(fd); }
+        try { chmodSync(claimPath, 0o600); } catch {}
+        process.stdout.write("ok");
       } catch (e) {
         process.stdout.write("error:" + (e instanceof Error ? e.message : String(e)));
       }
@@ -112,11 +127,13 @@ describe("durable replay", () => {
     const workerPath = join(dir, "worker.mjs");
     writeFileSync(workerPath, workerCode);
     const spawnWorker = () => new Promise<string>((resolve, reject) => {
-      const p = spawn("npx", ["tsx", workerPath], { stdio: ["ignore", "pipe", "pipe"] });
+      const p = spawn(process.execPath, [workerPath], { stdio: ["ignore", "pipe", "pipe"] });
       let out = "";
+      let errOut = "";
       p.stdout.on("data", d => out += d.toString());
+      p.stderr.on("data", d => errOut += d.toString());
       p.on("error", reject);
-      p.on("close", () => resolve(out.trim()));
+      p.on("close", () => resolve((out.trim() || errOut.trim())));
     });
     const p1 = spawnWorker();
     const p2 = spawnWorker();

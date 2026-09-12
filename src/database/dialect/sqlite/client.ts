@@ -13,12 +13,16 @@ export interface SQLiteConnection {
  * Read connection uses { readOnly: true }.
  * Write connection installs setAuthorizer defense-in-depth.
  */
+export function isSQLiteAuthorizerSupported(db: DatabaseSync): boolean {
+  return typeof (db as unknown as { setAuthorizer?: unknown }).setAuthorizer === "function";
+}
+
 export function openSQLite(path: string, mode: "read" | "write"): DatabaseSync {
   const db = mode === "read" ? new DatabaseSync(path, { readOnly: true }) : new DatabaseSync(path);
-  if (mode === "write") {
+  if (mode === "write" && isSQLiteAuthorizerSupported(db)) {
     // Defense-in-depth: deny-list on write connections per ADR 0011.
     // Return values: 0 = SQLITE_OK (allow), 1 = SQLITE_DENY (deny with error).
-    // SQLITE_ATTACH = 8, SQLITE_DETACH = 9, SQLITE_PRAGMA = 11
+    // SQLITE_ATTACH = 24, SQLITE_DETACH = 25, SQLITE_PRAGMA = 19.
     db.setAuthorizer((actionCode: number, detail1: string | null, _detail2: string | null, _detail3: string | null, _triggerView: string | null) => {
       // SQLITE_ATTACH = 24 — deny ATTACH DATABASE
       if (actionCode === 24) return 1;
@@ -46,6 +50,12 @@ export function createSQLiteClient(db: DatabaseSync): DatabaseClient {
       text: string,
       params?: readonly unknown[],
     ): Promise<DatabaseQueryResult> {
+      // Query-layer deny-list: covers runtimes where setAuthorizer is
+      // unavailable (e.g. Node 22.19) and direct client.query callers.
+      // Matches authorizer behavior: ATTACH/DETACH always denied.
+      if (/^\s*(ATTACH|DETACH)\b/i.test(text)) {
+        throw new Error("SQLite ATTACH/DETACH blocked by deny-list");
+      }
       const stmt = db.prepare(text);
       const cols = stmt.columns();
       const inputParams = (params ?? []) as any[];

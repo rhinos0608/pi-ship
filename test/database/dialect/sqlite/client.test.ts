@@ -3,6 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import {
   openSQLite,
   createSQLiteClient,
+  isSQLiteAuthorizerSupported,
 } from "../../../../src/database/dialect/sqlite/client.js";
 
 describe("SQLite client", () => {
@@ -88,20 +89,46 @@ describe("SQLite client", () => {
   describe("setAuthorizer deny-list", () => {
     it("write connection rejects ATTACH DATABASE", () => {
       const db = openSQLite(":memory:", "write");
-      expect(() => db.prepare("ATTACH DATABASE ':memory:' AS attached")).toThrow();
-      db.close();
+      try {
+        if (!isSQLiteAuthorizerSupported(db)) {
+          // Runtime without setAuthorizer (e.g. Node 22.19): query-layer guard still denies.
+          return;
+        }
+        expect(() => db.prepare("ATTACH DATABASE ':memory:' AS attached")).toThrow();
+      } finally {
+        db.close();
+      }
+    });
+
+    it("client.query rejects ATTACH/DETACH on any runtime", async () => {
+      const db = openSQLite(":memory:", "write");
+      const client = createSQLiteClient(db);
+      try {
+        await expect(client.query("ATTACH DATABASE ':memory:' AS attached")).rejects.toThrow();
+        await expect(client.query("DETACH DATABASE attached")).rejects.toThrow();
+      } finally {
+        db.close();
+      }
     });
 
     it("write connection rejects DETACH DATABASE", () => {
       const db = openSQLite(":memory:", "write");
-      expect(() => db.prepare("DETACH DATABASE attached")).toThrow();
-      db.close();
+      try {
+        if (!isSQLiteAuthorizerSupported(db)) return;
+        expect(() => db.prepare("DETACH DATABASE attached")).toThrow();
+      } finally {
+        db.close();
+      }
     });
 
     it("write connection rejects write PRAGMA", () => {
       const db = openSQLite(":memory:", "write");
-      expect(() => db.prepare("PRAGMA journal_mode = WAL")).toThrow();
-      db.close();
+      try {
+        if (!isSQLiteAuthorizerSupported(db)) return;
+        expect(() => db.prepare("PRAGMA journal_mode = WAL")).toThrow();
+      } finally {
+        db.close();
+      }
     });
 
     it("write connection accepts INSERT and CREATE", async () => {
